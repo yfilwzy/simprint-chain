@@ -8,6 +8,8 @@ use crate::infrastructure::updater::types::{
     FoundUpdatesPayload, InstallStrategy, LatestRelease, NoUpdatesPayload, UpdateEvent,
 };
 use crate::infrastructure::updater::{checker, downloader, planner, service, verifier};
+use crate::services::runtime_updater::RuntimeUpdateService;
+use crate::services::updater::types::PreparedUpdateInfo;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -51,6 +53,32 @@ fn map_update_check_error(stage: &str, err: impl std::fmt::Display) -> Error {
 }
 
 impl UpdateService {
+    pub async fn get_prepared_update() -> Result<Option<PreparedUpdateInfo>> {
+        if let Some(update) = RuntimeUpdateService::peek_prepared_update().await? {
+            return Ok(Some(update));
+        }
+
+        Ok(None)
+    }
+
+    pub async fn start_prepared_update_install(
+        app_handle: AppHandle,
+        kind: Option<String>,
+    ) -> Result<()> {
+        let resolved_kind = match kind {
+            Some(kind) => kind,
+            None => Self::get_prepared_update()
+                .await?
+                .map(|update| update.kind)
+                .ok_or("当前没有可安装的更新")?,
+        };
+
+        match resolved_kind.as_str() {
+            "runtime" => RuntimeUpdateService::start_prepared_install(app_handle).await,
+            _ => Err(format!("不支持的更新类型: {}", resolved_kind).into()),
+        }
+    }
+
     /// 简单检查是否有可用更新（仅检查，不缓存计划，不发送事件）
     ///
     /// 用于设置页面的「检查更新」按钮，返回布尔值。具体更新逻辑由重启时自动完成。
@@ -391,18 +419,20 @@ impl UpdateService {
             return launch_installer_update(PathBuf::from(installer_path)).await;
         }
 
-        // 1. 获取任务文件路径
         let tasks_file_path = service::get_tasks_file_path()?;
+        Self::start_update_install_with_tasks_file(tasks_file_path).await
+    }
 
-        // 2. 检查任务文件是否存在
+    pub async fn start_update_install_with_tasks_file(tasks_file_path: PathBuf) -> Result<()> {
+        // 1. 检查任务文件是否存在
         if !tasks_file_path.exists() {
             return Err(format!("任务文件不存在: {}", tasks_file_path.display()).into());
         }
 
-        // 3. 获取 updater.exe 所在目录
+        // 2. 获取 updater.exe 所在目录
         let exe_dir = service::get_exe_directory()?;
 
-        // 4. 构建 updater.exe 路径
+        // 3. 构建 updater.exe 路径
         let updater_exe = exe_dir.join("updater.exe");
 
         if !updater_exe.exists() {
@@ -410,7 +440,7 @@ impl UpdateService {
             return Err("UPDATER_NOT_FOUND".into());
         }
 
-        // 5. 启动 updater.exe install <tasks_file>
+        // 4. 启动 updater.exe install <tasks_file>
         #[cfg(target_os = "windows")]
         {
             use std::process::Stdio;
@@ -447,7 +477,7 @@ impl UpdateService {
                 .spawn()?;
         }
 
-        // 4. 延迟后退出主程序（给 updater 一点时间启动）
+        // 5. 延迟后退出主程序（给 updater 一点时间启动）
         tokio::spawn(async {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             std::process::exit(0);

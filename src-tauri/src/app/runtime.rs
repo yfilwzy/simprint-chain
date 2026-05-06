@@ -400,16 +400,21 @@ fn runtime_err_to_string(error: RuntimeIpcError) -> crate::core::error::Error {
     error.to_string().into()
 }
 
-fn resolve_runtime_executable_path() -> crate::core::error::Result<PathBuf> {
+pub fn runtime_executable_path() -> crate::core::error::Result<PathBuf> {
+    if !cfg!(feature = "production") {
+        let resource_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join(runtime_file_name());
+        return Ok(resource_path);
+    }
+
     let current_exe = std::env::current_exe()?;
     let executable_dir = current_exe.parent().ok_or("无法确定当前可执行文件目录")?;
+    Ok(executable_dir.join(runtime_file_name()))
+}
 
-    #[cfg(target_os = "windows")]
-    let runtime_name = "simprint-runtime.exe";
-    #[cfg(not(target_os = "windows"))]
-    let runtime_name = "simprint-runtime";
-
-    let runtime_path = executable_dir.join(runtime_name);
+fn resolve_runtime_executable_path() -> crate::core::error::Result<PathBuf> {
+    let runtime_path = runtime_executable_path()?;
     if !runtime_path.exists() {
         return Err(format!(
             "未找到 simprint-runtime 可执行文件: {}",
@@ -419,6 +424,18 @@ fn resolve_runtime_executable_path() -> crate::core::error::Result<PathBuf> {
     }
 
     Ok(runtime_path)
+}
+
+fn runtime_file_name() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "simprint-runtime.exe"
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        "simprint-runtime"
+    }
 }
 
 fn current_auth_info() -> AuthInfo {

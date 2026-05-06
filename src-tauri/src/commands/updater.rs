@@ -2,7 +2,7 @@
 ///
 /// 提供检查更新和下载的功能，由主程序调用
 use crate::core::error::Result;
-use crate::services::updater::{CheckResult, DownloadResult, UpdateService};
+use crate::services::updater::{CheckResult, DownloadResult, PreparedUpdateInfo, UpdateService};
 use tauri::AppHandle;
 
 /// 简单检查是否有可用更新（仅检查，不缓存计划，不发送事件）
@@ -54,4 +54,17 @@ pub async fn download_updates(
 #[tauri::command]
 pub async fn start_update_install(app_handle: AppHandle) -> Result<()> {
     UpdateService::start_update_install(app_handle).await
+}
+
+#[tauri::command]
+pub async fn start_prepared_update_install(
+    app_handle: AppHandle,
+    kind: Option<String>,
+) -> Result<()> {
+    UpdateService::start_prepared_update_install(app_handle, kind).await
+}
+
+#[tauri::command]
+pub async fn get_prepared_update() -> Result<Option<PreparedUpdateInfo>> {
+    UpdateService::get_prepared_update().await
 }

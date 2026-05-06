@@ -6,6 +6,7 @@ secret_key = "replace-with-your-secret-key"
 [updater]
 check_url = "https://update.example.com/api/v1/versions/check"
 latest_json_url = "https://downloads.example.com/latest.json"
+runtime_latest_json_url = "https://downloads.example.com/simprint-runtime/latest.json"
 updater_temp_dir = "updates"
 
 [webview]

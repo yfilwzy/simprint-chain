@@ -85,6 +85,8 @@ pub fn register_handles() -> impl Fn(Invoke<tauri::Wry>) -> bool + Send + Sync +
         updater::check_updates,
         updater::download_updates,
         updater::start_update_install,
+        updater::start_prepared_update_install,
+        updater::get_prepared_update,
         // Core utilities
         crate::core::utils::process::kill_process,
         // Logging commands

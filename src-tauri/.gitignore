@@ -11,3 +11,6 @@
 /config.production.toml
 /config.test.toml
 !/config.example.toml
+
+# Downloaded runtime resources
+/resources/

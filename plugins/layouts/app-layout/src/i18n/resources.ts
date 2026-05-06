@@ -184,6 +184,15 @@ export const appLayoutResources = {
       active: '{{count}} 个进行中',
       clearCompleted: '清除已完成',
     },
+    update: {
+      ready: '更新已就绪',
+      dialogTitle: '更新已准备完成',
+      dialogDescription: '检测到新的更新内容。立即重启应用以完成安装。',
+      later: '稍后',
+      restartAndInstall: '重启并安装',
+      restarting: '正在重启...',
+      installStartFailed: '启动更新安装失败',
+    },
   },
   'en-US': {
     nav: {
@@ -370,6 +379,15 @@ export const appLayoutResources = {
       empty: 'No download tasks',
       active: '{{count}} active',
       clearCompleted: 'Clear completed',
+    },
+    update: {
+      ready: 'Update ready',
+      dialogTitle: 'Update Ready',
+      dialogDescription: 'A prepared update is ready. Restart the app now to finish installation.',
+      later: 'Later',
+      restartAndInstall: 'Restart and Install',
+      restarting: 'Restarting...',
+      installStartFailed: 'Failed to start update install.',
     },
   },
 } as const;

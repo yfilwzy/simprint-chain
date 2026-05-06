@@ -15,6 +15,7 @@ use crate::infrastructure::main_server::client::MainServerRequestClient;
 use crate::local_api::LocalApiManager;
 use crate::mcp::McpManager;
 use crate::services::environment::{EnvironmentPositionManager, EnvironmentStatusManager};
+use crate::services::runtime_updater::RuntimeUpdateService;
 
 /// 应用上下文
 ///
@@ -43,6 +44,9 @@ pub struct AppContext {
 
     /// simprint-runtime 进程管理器
     pub simprint_runtime_manager: Arc<SimprintRuntimeManager>,
+
+    /// simprint-runtime 更新服务
+    pub runtime_update_service: Arc<RuntimeUpdateService>,
 }
 
 /// 全局应用上下文实例
@@ -89,6 +93,9 @@ impl AppContext {
         // 初始化 simprint-runtime 管理器
         let simprint_runtime_manager = Arc::new(SimprintRuntimeManager::new());
 
+        // 初始化 simprint-runtime 更新服务
+        let runtime_update_service = Arc::new(RuntimeUpdateService::new());
+
         Ok(Self {
             config,
             rsa_keypair,
@@ -98,6 +105,7 @@ impl AppContext {
             local_api_manager,
             mcp_manager,
             simprint_runtime_manager,
+            runtime_update_service,
         })
     }
 
