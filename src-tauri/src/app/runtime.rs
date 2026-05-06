@@ -138,10 +138,21 @@ impl SimprintRuntimeManager {
         }
 
         let executable = resolve_runtime_executable_path()?;
-        let mut child = Command::new(&executable)
+        let mut command = Command::new(&executable);
+        command
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let mut child = command
             .spawn()
             .map_err(|error| format!("启动 simprint-runtime 失败: {}", error))?;
 
