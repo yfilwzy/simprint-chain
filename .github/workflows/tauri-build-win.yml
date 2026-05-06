@@ -102,27 +102,9 @@ jobs:
         # For release events, GITHUB_REF_NAME is usually "vX.Y.Z" as well.
         run: node deploy/prepare-version.mjs
 
-      - name: Check existing Tauri bundle
-        id: tauri_bundle
-        shell: powershell
-        run: |
-          $version = "${{ env.RELEASE_TAG }}".TrimStart('v')
-          $bundleDir = "src-tauri/target/release/bundle/nsis"
-          $pattern = "*${version}*setup.exe"
-          $installer = Get-ChildItem $bundleDir -Filter $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
-
-          if ($installer) {
-            "skip_build=true" >> $env:GITHUB_OUTPUT
-            Write-Host "Found existing installer: $($installer.FullName)"
-          } else {
-            "skip_build=false" >> $env:GITHUB_OUTPUT
-            Write-Host "No existing installer matched pattern '$pattern'"
-          }
-
       # Build and bundle the Tauri app.
       # It will run `beforeBuildCommand` from `src-tauri/tauri.conf.json` (node build.cjs -> pnpm build:<env>)
       - name: Build Tauri app
-        if: steps.tauri_bundle.outputs.skip_build != 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           # 使用统一的 GT_TOKEN 作为凭证来源
