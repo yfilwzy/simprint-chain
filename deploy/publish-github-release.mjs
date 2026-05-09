@@ -1,7 +1,5 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 
 const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
 const repository = process.env.GH_REPO || process.env.GITHUB_REPOSITORY;
@@ -10,7 +8,6 @@ const installerDir = path.resolve(
   process.env.RELEASE_INSTALLER_DIR || 'src-tauri/target/release/bundle/nsis'
 );
 const latestJsonPath = path.resolve(process.env.RELEASE_LATEST_JSON_PATH || 'latest.json');
-const execFileAsync = promisify(execFile);
 
 if (!token) throw new Error('GH_TOKEN or GITHUB_TOKEN is not set');
 if (!repository) throw new Error('GH_REPO or GITHUB_REPOSITORY is not set');
@@ -39,17 +36,33 @@ async function findInstaller(dir) {
 
 async function readTagNotes(tagName) {
   try {
-    const ref = `refs/tags/${tagName}`;
-    const { stdout: objectType } = await execFileAsync('git', ['cat-file', '-t', ref]);
-    if (objectType.trim() !== 'tag') {
-      console.log(`Tag ${tagName} is not an annotated tag, fallback to generated release notes`);
+    const refResponse = await githubApi(`/repos/${owner}/${repo}/git/ref/tags/${encodeURIComponent(tagName)}`, {
+      okStatuses: [200, 404],
+    });
+
+    if (refResponse.status === 404) {
+      console.log(`Tag ref ${tagName} not found on GitHub, fallback to generated release notes`);
       return '';
     }
 
-    const { stdout } = await execFileAsync('git', ['for-each-ref', ref, '--format=%(contents)']);
-    return stdout.trim();
+    const target = refResponse.json?.object;
+    if (!target || target.type !== 'tag' || !target.sha) {
+      console.log(`Tag ${tagName} is not an annotated tag on GitHub, fallback to generated release notes`);
+      return '';
+    }
+
+    const tagObject = await githubApi(`/repos/${owner}/${repo}/git/tags/${target.sha}`, {
+      okStatuses: [200, 404],
+    });
+
+    if (tagObject.status === 404) {
+      console.log(`Annotated tag object for ${tagName} not found on GitHub, fallback to generated release notes`);
+      return '';
+    }
+
+    return (tagObject.json?.message || '').trim();
   } catch (error) {
-    console.warn(`Failed to read git tag notes for ${tagName}: ${error.message}`);
+    console.warn(`Failed to read GitHub tag notes for ${tagName}: ${error.message}`);
     return '';
   }
 }
