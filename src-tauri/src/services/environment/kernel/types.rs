@@ -147,7 +147,10 @@ pub struct ExtensionInfo {
     pub extension_id: String,
     pub name: String,
     pub version: String,
-    pub download_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub download_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub managed_crx_path: Option<String>,
     pub hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon_url: Option<String>,

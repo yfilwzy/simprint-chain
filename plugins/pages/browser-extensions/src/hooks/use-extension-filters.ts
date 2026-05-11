@@ -41,14 +41,10 @@ export function useExtensionFilters(
  */
 export function useStoreExtensions(extensions: ExtensionItem[]): StoreExtension[] {
   return useMemo(() => {
-    const installedIds = new Set(
-      extensions.filter((e) => e.status === 'installed' || e.status === 'update').map((e) => e.id)
-    );
     return extensions.map((ext) => ({
       ...ext,
       // 使用后端返回的 rating，如果没有则不显示
       rating: ext.rating,
-      isInstalled: installedIds.has(ext.id),
     }));
   }, [extensions]);
 }

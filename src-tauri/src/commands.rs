@@ -5,6 +5,7 @@ pub mod auth;
 pub mod environment;
 pub mod file_system;
 pub mod local_api;
+pub mod local_extensions;
 pub mod logging;
 pub mod mcp;
 pub mod network;
@@ -96,6 +97,14 @@ pub fn register_handles() -> impl Fn(Invoke<tauri::Wry>) -> bool + Send + Sync +
         local_api::start_local_api_runtime,
         local_api::reload_local_api_runtime,
         local_api::stop_local_api_runtime,
+        local_extensions::import_local_extension_crx,
+        local_extensions::import_local_extension_store_url,
+        local_extensions::list_local_extensions,
+        local_extensions::install_local_extension,
+        local_extensions::uninstall_local_extension,
+        local_extensions::remove_local_extension,
+        local_extensions::disable_local_extension,
+        local_extensions::enable_local_extension,
         mcp::get_mcp_config,
         mcp::update_mcp_config,
         mcp::start_mcp_runtime,

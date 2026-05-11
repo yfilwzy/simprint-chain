@@ -7,6 +7,11 @@ import {
   batchUpdateExtensions as apiBatchUpdateExtensions,
   disableExtension as apiDisableExtension,
   enableExtension as apiEnableExtension,
+  installLocalExtension as apiInstallLocalExtension,
+  uninstallLocalExtension as apiUninstallLocalExtension,
+  removeLocalExtension as apiRemoveLocalExtension,
+  disableLocalExtension as apiDisableLocalExtension,
+  enableLocalExtension as apiEnableLocalExtension,
 } from '../api';
 
 interface UseExtensionOperationsReturn {
@@ -18,10 +23,11 @@ interface UseExtensionOperationsReturn {
   ) => Promise<void>;
   updateExtension: (id: string) => Promise<ExtensionItem | null>;
   uninstallExtension: (extension: ExtensionItem) => Promise<void>;
-  batchUpdate: (ids: string[]) => Promise<void>;
+  removeExtension: (extension: ExtensionItem) => Promise<void>;
+  batchUpdate: (extensions: ExtensionItem[]) => Promise<void>;
   batchUninstall: (extensions: ExtensionItem[]) => Promise<void>;
-  disableExtension: (id: string) => Promise<void>;
-  enableExtension: (id: string) => Promise<void>;
+  disableExtension: (extension: ExtensionItem) => Promise<void>;
+  enableExtension: (extension: ExtensionItem) => Promise<void>;
 }
 
 /**
@@ -37,6 +43,15 @@ export function useExtensionOperations(onComplete?: () => void): UseExtensionOpe
   ) => {
     setInstalling(true);
     try {
+      if (extension.source === 'local') {
+        if (!extension.recordId) {
+          throw new Error('本地插件缺少 recordId');
+        }
+        await apiInstallLocalExtension(extension.recordId);
+        onComplete?.();
+        return;
+      }
+
       // 如果选择了分组
       if (groupIds.length > 0) {
         // 安装到分组，is_team_shared 由 forTeam 决定
@@ -68,15 +83,27 @@ export function useExtensionOperations(onComplete?: () => void): UseExtensionOpe
       return {
         id: result.extensionId,
         uuid: result.id,
+        recordId: result.recordId,
+        extensionId: result.extensionId,
         name: result.name,
         description: result.description,
         version: result.version,
-        icon: result.icon,
+        icon: result.icon || '',
         browser: result.browser as ExtensionItem['browser'],
         status: result.status,
+        source: result.source,
         author: result.author,
+        homepage: result.homepage,
         downloads: result.downloads,
+        rating: result.rating,
         updatedAt: result.updatedAt,
+        createdAt: result.createdAt,
+        fileSize: result.fileSize,
+        permissions: result.permissions,
+        hash: result.hash,
+        scope: result.scope,
+        groups: result.groups,
+        category: result.category,
       };
     } catch {
       return null;
@@ -85,6 +112,15 @@ export function useExtensionOperations(onComplete?: () => void): UseExtensionOpe
 
   const uninstallExtension = async (extension: ExtensionItem) => {
     try {
+      if (extension.source === 'local') {
+        if (!extension.recordId) {
+          throw new Error('本地插件缺少 recordId');
+        }
+        await apiUninstallLocalExtension(extension.recordId);
+        onComplete?.();
+        return;
+      }
+
       // 根据 scope 决定卸载类型和目标
       let targetType: 'user' | 'team' | 'group' = 'user';
       let targetUuid: string | undefined = undefined;
@@ -114,12 +150,34 @@ export function useExtensionOperations(onComplete?: () => void): UseExtensionOpe
     }
   };
 
-  const batchUpdate = async (ids: string[]) => {
+  const batchUpdate = async (extensions: ExtensionItem[]) => {
     try {
-      await apiBatchUpdateExtensions(ids);
-      onComplete?.();
+      const remoteIds = extensions
+        .filter((extension) => extension.source === 'remote')
+        .map((extension) => extension.id);
+      if (remoteIds.length > 0) {
+        await apiBatchUpdateExtensions(remoteIds);
+        onComplete?.();
+      }
     } catch {
       // 忽略错误
+    }
+  };
+
+  const removeExtension = async (extension: ExtensionItem) => {
+    try {
+      if (extension.source === 'local') {
+        if (!extension.recordId) {
+          throw new Error('本地插件缺少 recordId');
+        }
+        await apiRemoveLocalExtension(extension.recordId);
+      } else {
+        await uninstallExtension(extension);
+        return;
+      }
+      onComplete?.();
+    } catch {
+      // 错误已处理
     }
   };
 
@@ -135,18 +193,32 @@ export function useExtensionOperations(onComplete?: () => void): UseExtensionOpe
     onComplete?.();
   };
 
-  const disableExtension = async (id: string) => {
+  const disableExtension = async (extension: ExtensionItem) => {
     try {
-      await apiDisableExtension(id);
+      if (extension.source === 'local') {
+        if (!extension.recordId) {
+          throw new Error('本地插件缺少 recordId');
+        }
+        await apiDisableLocalExtension(extension.recordId);
+      } else {
+        await apiDisableExtension(extension.id);
+      }
       onComplete?.();
     } catch {
       // 错误已处理
     }
   };
 
-  const enableExtension = async (id: string) => {
+  const enableExtension = async (extension: ExtensionItem) => {
     try {
-      await apiEnableExtension(id);
+      if (extension.source === 'local') {
+        if (!extension.recordId) {
+          throw new Error('本地插件缺少 recordId');
+        }
+        await apiEnableLocalExtension(extension.recordId);
+      } else {
+        await apiEnableExtension(extension.id);
+      }
       onComplete?.();
     } catch {
       // 错误已处理
@@ -158,6 +230,7 @@ export function useExtensionOperations(onComplete?: () => void): UseExtensionOpe
     installExtension,
     updateExtension,
     uninstallExtension,
+    removeExtension,
     batchUpdate,
     batchUninstall,
     disableExtension,

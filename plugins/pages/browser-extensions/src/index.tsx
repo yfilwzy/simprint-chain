@@ -8,7 +8,8 @@ import { ExtensionTable } from './components/extension-table';
 import { ExtensionBatchActions } from './components/extension-batch-actions';
 import { ExtensionPagination } from './components/extension-pagination';
 import { ExtensionStore } from './components/extension-store';
-import { ExtensionStoreSkeleton } from './components/extension-store-skeleton';
+import { LocalExtensionLibrary } from './components/local-extension-library';
+import { LocalExtensionImportDialog } from './components/local-extension-import-dialog';
 import { ExtensionInstallDialog } from './components/extension-install-dialog';
 import { ExtensionUninstallDialog } from './components/extension-uninstall-dialog';
 import { ExtensionDetailDialog } from './components/extension-detail-dialog';
@@ -22,14 +23,21 @@ import { useExtensionStats } from './hooks/use-extension-stats';
 import { useViewMode } from './hooks/use-view-mode';
 import { useSearchPagination } from './hooks/use-search-pagination';
 import { useExtensionHandlers } from './hooks/use-extension-handlers';
-import { listGroups, type GroupItem } from './api';
+import {
+  importLocalExtensionCrx,
+  importLocalExtensionStoreUrl,
+  listGroups,
+  type GroupItem,
+} from './api';
 import { STORE_ITEMS_PER_PAGE } from './constants';
 import type { SortOption } from './types';
+import { toast } from 'sonner';
 
 const BrowserExtensionsPage: React.FC = () => {
   const { t } = useTranslation('extensions');
   const [scopeFilter, setScopeFilter] = useState('all');
-  const [storeLoading, setStoreLoading] = useState(false);
+  const [importingLocal, setImportingLocal] = useState(false);
+  const [localImportDialogOpen, setLocalImportDialogOpen] = useState(false);
 
   // 分组数据
   const [groups, setGroups] = useState<GroupItem[]>([]);
@@ -56,14 +64,19 @@ const BrowserExtensionsPage: React.FC = () => {
   // 将 scopeFilter 映射到 API 的 scope 参数：'all' -> 'all', 'team' -> 'team', 'personal' -> 'user'
   const apiScope = scopeFilter === 'personal' ? 'user' : scopeFilter === 'team' ? 'team' : 'all';
   const installedExtensionsHook = useExtensions('installed', apiScope);
+  const localExtensionsHook = useExtensions('local');
 
   // 根据视图模式选择对应的数据和刷新函数
   const {
-    extensions: allExtensions,
+    extensions: viewExtensions,
     loading,
     error,
     refresh,
-  } = viewMode === 'installed' ? installedExtensionsHook : allExtensionsHook;
+  } = viewMode === 'installed'
+    ? installedExtensionsHook
+    : viewMode === 'local'
+      ? localExtensionsHook
+      : allExtensionsHook;
 
   // 获取已安装扩展的数据（用于统计）
   const { extensions: installedExtensions } = installedExtensionsHook;
@@ -80,6 +93,8 @@ const BrowserExtensionsPage: React.FC = () => {
   useEffect(() => {
     if (viewMode === 'installed') {
       void installedExtensionsHook.refresh();
+    } else if (viewMode === 'local') {
+      void localExtensionsHook.refresh();
     } else {
       void allExtensionsHook.refresh();
     }
@@ -101,19 +116,26 @@ const BrowserExtensionsPage: React.FC = () => {
     void allExtensionsHook.refresh();
   }, [allExtensionsHook.refresh]);
 
+  useEffect(() => {
+    if (viewMode !== 'local') {
+      return;
+    }
+    void localExtensionsHook.refresh();
+  }, [localExtensionsHook.refresh, viewMode]);
+
   // 过滤
   // 注意：已安装视图模式下，API 返回的都是已安装的扩展，不需要再次过滤状态
-  const allFilteredExtensions = useExtensionFilters(allExtensions, {
+  const allFilteredExtensions = useExtensionFilters(allExtensionsHook.extensions, {
     searchQuery,
     scopeFilter,
   });
 
   // 对于已安装视图，只进行搜索过滤（不过滤状态，因为 API 返回的都是已安装的）
   const filteredExtensions = useMemo(() => {
-    if (viewMode === 'installed') {
-      if (!searchQuery) return allExtensions;
+    if (viewMode === 'installed' || viewMode === 'local') {
+      if (!searchQuery) return viewExtensions;
       const query = searchQuery.toLowerCase();
-      return allExtensions.filter(
+      return viewExtensions.filter(
         (ext) =>
           ext.name.toLowerCase().includes(query) ||
           ext.description.toLowerCase().includes(query) ||
@@ -121,10 +143,10 @@ const BrowserExtensionsPage: React.FC = () => {
       );
     }
     return allFilteredExtensions;
-  }, [viewMode, allExtensions, allFilteredExtensions, searchQuery]);
+  }, [viewMode, viewExtensions, allFilteredExtensions, searchQuery]);
 
   // 商店扩展
-  const storeExtensions = useStoreExtensions(allExtensions);
+  const storeExtensions = useStoreExtensions(allExtensionsHook.extensions);
 
   // 分页
   const { paginatedExtensions, totalPages } = useExtensionPagination(
@@ -145,11 +167,19 @@ const BrowserExtensionsPage: React.FC = () => {
     availableCount: allStats.availableCount,
   };
 
+  const refreshAfterOperation = async () => {
+    await Promise.all([
+      refresh(),
+      installedExtensionsHook.refresh(),
+      localExtensionsHook.refresh(),
+    ]);
+  };
+
   // 事件处理（整合所有操作）
   const handlers = useExtensionHandlers({
-    extensions: allExtensions,
+    extensions: viewExtensions,
     paginatedExtensions,
-    onRefresh: refresh,
+    onRefresh: refreshAfterOperation,
   });
 
   // 加载分组数据
@@ -186,6 +216,46 @@ const BrowserExtensionsPage: React.FC = () => {
 
   const handleStoreSortChange = (sort: SortOption) => {
     setStoreSortBy(sort);
+  };
+
+  const handleImportLocal = async ({
+    mode,
+    crxPath,
+    storeUrl,
+  }: {
+    mode: 'file' | 'storeUrl';
+    crxPath?: string;
+    storeUrl?: string;
+  }) => {
+    try {
+      setImportingLocal(true);
+      const result =
+        mode === 'file'
+          ? await importLocalExtensionCrx(crxPath || '')
+          : await importLocalExtensionStoreUrl(storeUrl || '');
+
+      if (result.importState === 'imported') {
+        await Promise.all([localExtensionsHook.refresh(), installedExtensionsHook.refresh()]);
+      }
+
+      setLocalImportDialogOpen(false);
+
+      if (result.importState === 'alreadyInstalled') {
+        toast.info(t('dialog.localImport.alreadyInstalled'));
+      } else if (result.importState === 'alreadyExists') {
+        toast.info(t('dialog.localImport.alreadyExists'));
+      } else {
+        toast.success(t('dialog.localImport.success'));
+      }
+
+      if (viewMode !== 'local') {
+        setViewMode('local');
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '导入本地插件失败');
+    } finally {
+      setImportingLocal(false);
+    }
   };
 
   return (
@@ -245,6 +315,30 @@ const BrowserExtensionsPage: React.FC = () => {
             onClearSelection={handlers.selection.clearSelection}
           />
         </>
+      ) : viewMode === 'store' ? (
+        <>
+          {error && (
+            <div className="px-4 py-2 text-xs text-destructive bg-destructive/10">
+              {t('error', { message: error })}
+            </div>
+          )}
+
+          <ExtensionStore
+            extensions={storeExtensions}
+            searchQuery={searchQuery}
+            totalCount={allExtensionsHook.total}
+            currentPage={currentPage}
+            totalPages={Math.max(1, Math.ceil(allExtensionsHook.total / storePageSize))}
+            pageSize={storePageSize}
+            categoryFilter={storeCategory}
+            sortBy={storeSortBy}
+            onCategoryChange={handleStoreCategoryChange}
+            onSortChange={handleStoreSortChange}
+            onPageChange={handlePageChange}
+            onPageSizeChange={handleStorePageSizeChange}
+            onInstall={handlers.handleInstall}
+          />
+        </>
       ) : (
         <>
           {error && (
@@ -253,25 +347,16 @@ const BrowserExtensionsPage: React.FC = () => {
             </div>
           )}
 
-          {storeLoading ? (
-            <ExtensionStoreSkeleton />
-          ) : (
-            <ExtensionStore
-              extensions={storeExtensions}
-              searchQuery={searchQuery}
-              totalCount={allExtensionsHook.total}
-              currentPage={currentPage}
-              totalPages={Math.max(1, Math.ceil(allExtensionsHook.total / storePageSize))}
-              pageSize={storePageSize}
-              categoryFilter={storeCategory}
-              sortBy={storeSortBy}
-              onCategoryChange={handleStoreCategoryChange}
-              onSortChange={handleStoreSortChange}
-              onPageChange={handlePageChange}
-              onPageSizeChange={handleStorePageSizeChange}
-              onInstall={handlers.handleInstall}
-            />
-          )}
+          <LocalExtensionLibrary
+            extensions={filteredExtensions}
+            importing={importingLocal}
+            onImport={() => setLocalImportDialogOpen(true)}
+            onInstall={(extension) => handlers.handleInstall(extension.id)}
+            onDisable={(extension) => handlers.handleDisable(extension.id, extension.name)}
+            onEnable={(extension) => handlers.handleEnable(extension.id, extension.name)}
+            onRemove={(extension) => handlers.handleRemove(extension.id, extension.name)}
+            onViewDetails={(extension) => handlers.handleViewDetails(extension.id)}
+          />
         </>
       )}
 
@@ -290,10 +375,18 @@ const BrowserExtensionsPage: React.FC = () => {
         onConfirm={handlers.handleConfirmInstall}
       />
 
+      <LocalExtensionImportDialog
+        open={localImportDialogOpen}
+        importing={importingLocal}
+        onOpenChange={setLocalImportDialogOpen}
+        onSubmit={handleImportLocal}
+      />
+
       {/* 卸载确认对话框 */}
       <ExtensionUninstallDialog
         open={handlers.uninstallDialog.uninstallDialogOpen}
         extension={handlers.uninstallDialog.uninstallingExt}
+        action={handlers.uninstallDialog.action}
         onOpenChange={handlers.uninstallDialog.closeUninstallDialog}
         onConfirm={handlers.handleConfirmUninstall}
       />
@@ -301,7 +394,7 @@ const BrowserExtensionsPage: React.FC = () => {
       {/* 详情对话框 */}
       <ExtensionDetailDialog
         open={handlers.detailDialog.detailDialogOpen}
-        extensionId={handlers.detailDialog.viewingExtensionId}
+        extension={handlers.detailDialog.viewingExtension}
         onOpenChange={handlers.detailDialog.closeDetailDialog}
       />
 

@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Ban, Play, X, Loader2, Package, Star } from 'lucide-react';
+import { Ban, Play, X, Loader2, Star } from 'lucide-react';
 import { FormattedDialog, FormattedDialogFooter } from '@/components/formatted-dialog';
 import { Button } from '@/components/ui/button';
 import type { ExtensionItem } from '../types';
+import { ExtensionIcon } from './extension-icon';
 
 interface ExtensionToggleDialogProps {
   open: boolean;
@@ -65,27 +66,14 @@ export function ExtensionToggleDialog({
         {/* 扩展信息卡片 */}
         <div className="bg-muted/50 rounded-md p-4 border border-border/50">
           <div className="flex items-start gap-3">
-            {/* 图标 */}
-            {extension.icon ? (
-              typeof extension.icon === 'string' && extension.icon.startsWith('http') ? (
-                <img
-                  src={extension.icon}
-                  alt=""
-                  className="w-12 h-12 rounded-lg object-cover border border-border"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = 'none';
-                  }}
-                />
-              ) : (
-                <div className="w-12 h-12 rounded-lg border border-border flex items-center justify-center text-xl bg-background">
-                  {extension.icon}
-                </div>
-              )
-            ) : (
-              <div className="w-12 h-12 rounded-lg border border-border bg-muted flex items-center justify-center">
-                <Package className="h-6 w-6 text-muted-foreground" />
-              </div>
-            )}
+            <ExtensionIcon
+              icon={extension.icon}
+              source={extension.source}
+              containerClassName="h-12 w-12 rounded-lg border border-border bg-background"
+              imageClassName="rounded-lg"
+              textClassName="text-xl"
+              fallbackClassName="h-6 w-6"
+            />
 
             {/* 信息 */}
             <div className="flex-1 min-w-0">
@@ -147,11 +135,7 @@ export function ExtensionToggleDialog({
             </>
           ) : (
             <>
-              {isDisable ? (
-                <Ban className="h-4 w-4 mr-1.5" />
-              ) : (
-                <Play className="h-4 w-4 mr-1.5" />
-              )}
+              {isDisable ? <Ban className="h-4 w-4 mr-1.5" /> : <Play className="h-4 w-4 mr-1.5" />}
               {t(`dialog.toggle.${action}Confirm`)}
             </>
           )}

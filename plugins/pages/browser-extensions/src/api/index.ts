@@ -1,4 +1,5 @@
 import { post, isSuccess } from '@/lib/request';
+import { invoke } from '@/lib/tauri';
 
 // API 端点配置
 export const API_ENDPOINTS = {
@@ -49,23 +50,27 @@ export interface ExtensionDto {
 export interface Extension {
   id: string;
   extensionId: string;
+  recordId?: string;
   name: string;
   description: string;
   version: string;
-  category?: 'automation' | 'security' | 'productivity' | 'tools' | 'media' | 'social';
+  category?: string;
   browser: string;
+  source: 'remote' | 'local';
   author?: string;
   homepage?: string;
   icon?: string;
   downloadUrl?: string;
+  managedCrxPath?: string;
   fileSize?: number;
   downloads?: number;
   permissions?: string[];
-  status: 'installed' | 'available' | 'update';
+  status: 'installed' | 'available' | 'update' | 'disabled' | 'active';
   rating?: number;
   updatedAt?: string;
   createdAt?: string;
-  scope?: 'user' | 'team' | 'group-personal' | 'group-team'; // 安装范围
+  hash?: string;
+  scope?: 'user' | 'team' | 'group-personal' | 'group-team' | 'local'; // 安装范围
   groups?: Array<{
     uuid: string;
     name: string;
@@ -79,6 +84,7 @@ function transformExtensionDto(dto: ExtensionDto): Extension {
   return {
     id: dto.uuid,
     extensionId: dto.extension_id,
+    source: 'remote',
     name: dto.name,
     description: dto.description || '',
     version: dto.version,
@@ -99,6 +105,71 @@ function transformExtensionDto(dto: ExtensionDto): Extension {
       : undefined,
     updatedAt: dto.updated_at,
     createdAt: dto.created_at,
+    hash: undefined,
+  };
+}
+
+export interface LocalExtensionDto {
+  recordId: string;
+  extensionId: string;
+  name: string;
+  description: string;
+  version: string;
+  browser: string;
+  status: 'available' | 'active' | 'disabled';
+  source: 'local';
+  author?: string;
+  homepage?: string;
+  iconUrl?: string;
+  category?: string;
+  permissions?: string[];
+  hash?: string;
+  fileSize?: number;
+  downloadsCount?: number;
+  rating?: string | number;
+  importState?: 'imported' | 'already_exists' | 'already_installed';
+  importedAt: string;
+  updatedAt: string;
+}
+
+export type LocalExtensionImportState = 'imported' | 'alreadyExists' | 'alreadyInstalled';
+
+export interface LocalExtensionImportResult {
+  extension: Extension;
+  importState: LocalExtensionImportState;
+}
+
+function transformLocalExtensionDto(dto: LocalExtensionDto): Extension {
+  return {
+    id: dto.recordId,
+    recordId: dto.recordId,
+    extensionId: dto.extensionId,
+    name: dto.name,
+    description: dto.description || '',
+    version: dto.version,
+    category: dto.category,
+    browser: dto.browser || 'chrome',
+    source: 'local',
+    author: dto.author,
+    homepage: dto.homepage,
+    icon: dto.iconUrl,
+    downloadUrl: undefined,
+    fileSize: dto.fileSize,
+    downloads: dto.downloadsCount,
+    permissions: dto.permissions,
+    status:
+      dto.status === 'active' ? 'active' : dto.status === 'disabled' ? 'disabled' : 'available',
+    rating:
+      dto.rating !== undefined
+        ? typeof dto.rating === 'string'
+          ? parseFloat(dto.rating)
+          : dto.rating
+        : undefined,
+    updatedAt: dto.updatedAt,
+    createdAt: dto.importedAt,
+    hash: dto.hash,
+    scope: dto.status === 'available' ? undefined : 'local',
+    groups: undefined,
   };
 }
 
@@ -120,7 +191,12 @@ export async function listExtensions(params?: {
   page?: number;
   page_size?: number;
 }): Promise<ListExtensionsResponse> {
-  const result = await post<{ items: ExtensionDto[]; total: number; page: number; page_size: number }>(API_ENDPOINTS.LIST_EXTENSIONS, {
+  const result = await post<{
+    items: ExtensionDto[];
+    total: number;
+    page: number;
+    page_size: number;
+  }>(API_ENDPOINTS.LIST_EXTENSIONS, {
     page: params?.page || 1,
     page_size: params?.page_size || 12,
     filters: {
@@ -252,6 +328,7 @@ export async function listInstalledExtensions(
     extensions.push({
       id: installedItem.extension_id, // 使用 extension_id 作为业务 ID
       extensionId: installedItem.extension_id,
+      source: 'remote',
       name: installedItem.name,
       description: installedItem.description || '',
       version: installedItem.installed_version, // 使用已安装的版本号
@@ -268,9 +345,23 @@ export async function listInstalledExtensions(
       rating,
       updatedAt: installedItem.updated_at,
       createdAt: undefined, // 已安装扩展不需要创建时间
+      hash: undefined,
       scope: installedItem.scope, // 保留 scope 信息
       groups: installedItem.groups, // 关联的分组列表（包含 uuid 和 name）
     });
+  }
+
+  if (scope !== 'team') {
+    const localExtensions = await listLocalExtensions();
+    extensions.push(
+      ...localExtensions
+        .filter((item) => item.status === 'active' || item.status === 'disabled')
+        .map((item) => ({
+          ...item,
+          status: item.status,
+          scope: 'local' as const,
+        }))
+    );
   }
 
   return extensions;
@@ -423,4 +514,71 @@ export async function enableExtension(extensionId: string): Promise<void> {
   if (!isSuccess(result)) {
     throw new Error(result.message || '启用扩展失败');
   }
+}
+
+export async function listLocalExtensions(): Promise<Extension[]> {
+  const result = await invoke<LocalExtensionDto[]>('list_local_extensions');
+  return result.map(transformLocalExtensionDto);
+}
+
+export async function importLocalExtensionCrx(path: string): Promise<LocalExtensionImportResult> {
+  const result = await invoke<LocalExtensionDto>('import_local_extension_crx', {
+    path,
+  });
+  return transformLocalImportResult(result);
+}
+
+export async function importLocalExtensionStoreUrl(
+  storeUrl: string
+): Promise<LocalExtensionImportResult> {
+  const result = await invoke<LocalExtensionDto>('import_local_extension_store_url', {
+    storeUrl,
+  });
+  return transformLocalImportResult(result);
+}
+
+function transformLocalImportResult(dto: LocalExtensionDto): LocalExtensionImportResult {
+  return {
+    extension: transformLocalExtensionDto(dto),
+    importState:
+      dto.importState === 'already_installed'
+        ? 'alreadyInstalled'
+        : dto.importState === 'already_exists'
+          ? 'alreadyExists'
+          : 'imported',
+  };
+}
+
+export async function installLocalExtension(recordId: string): Promise<Extension> {
+  const result = await invoke<LocalExtensionDto>('install_local_extension', {
+    recordId,
+  });
+  return transformLocalExtensionDto(result);
+}
+
+export async function uninstallLocalExtension(recordId: string): Promise<Extension> {
+  const result = await invoke<LocalExtensionDto>('uninstall_local_extension', {
+    recordId,
+  });
+  return transformLocalExtensionDto(result);
+}
+
+export async function removeLocalExtension(recordId: string): Promise<void> {
+  await invoke('remove_local_extension', {
+    recordId,
+  });
+}
+
+export async function disableLocalExtension(recordId: string): Promise<Extension> {
+  const result = await invoke<LocalExtensionDto>('disable_local_extension', {
+    recordId,
+  });
+  return transformLocalExtensionDto(result);
+}
+
+export async function enableLocalExtension(recordId: string): Promise<Extension> {
+  const result = await invoke<LocalExtensionDto>('enable_local_extension', {
+    recordId,
+  });
+  return transformLocalExtensionDto(result);
 }

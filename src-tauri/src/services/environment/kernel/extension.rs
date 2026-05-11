@@ -86,9 +86,9 @@ pub async fn install_extensions(
                     true
                 };
 
-                // 下载扩展文件（如果需要）
+                // 获取扩展文件（如果需要）
                 if need_download {
-                    download_extension_with_retry(&app, &env_id, &ext, &crx_path).await?;
+                    materialize_extension_crx(&app, &env_id, &ext, &crx_path).await?;
                     // 下载后校验哈希
                     verify_extension_hash(&crx_path, &ext.hash)?;
                 }
@@ -155,6 +155,21 @@ pub async fn install_extensions(
     Ok(extension_dirs)
 }
 
+/// 准备扩展 CRX 文件：远端下载或本地复制
+async fn materialize_extension_crx(
+    app: &tauri::AppHandle,
+    env_id: &str,
+    ext: &super::types::ExtensionInfo,
+    crx_path: &Path,
+) -> Result<()> {
+    if let Some(local_path) = ext.managed_crx_path.as_deref() {
+        copy_local_extension_crx(local_path, crx_path)?;
+        return Ok(());
+    }
+
+    download_extension_with_retry(app, env_id, ext, crx_path).await
+}
+
 /// 下载扩展文件（带重试机制）
 async fn download_extension_with_retry(
     app: &tauri::AppHandle,
@@ -199,19 +214,20 @@ async fn download_extension(
     crx_path: &Path,
 ) -> Result<()> {
     use futures::StreamExt;
+    let download_url = ext.download_url.as_deref().ok_or("远端扩展缺少 download_url")?;
 
     crate::log_info!(
         crate::core::logger::modules::KERNEL,
         "下载扩展: {} from {}",
         ext.name,
-        ext.download_url
+        download_url
     );
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .build()?;
 
-    let response = client.get(&ext.download_url).send().await?;
+    let response = client.get(download_url).send().await?;
     if !response.status().is_success() {
         return Err(format!("下载扩展失败: HTTP {}", response.status()).into());
     }
@@ -241,6 +257,20 @@ async fn download_extension(
         }
     }
 
+    Ok(())
+}
+
+fn copy_local_extension_crx(source_path: &str, crx_path: &Path) -> Result<()> {
+    let source = Path::new(source_path);
+    if !source.exists() {
+        return Err(format!("本地插件文件不存在: {}", source.display()).into());
+    }
+
+    if let Some(parent) = crx_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    fs::copy(source, crx_path)?;
     Ok(())
 }
 

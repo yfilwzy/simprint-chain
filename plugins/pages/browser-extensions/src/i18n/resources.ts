@@ -6,6 +6,7 @@ export const extensionsResources = {
     viewMode: {
       installed: '已安装',
       store: '插件商店',
+      local: '本地插件',
     },
     header: {
       searchPlaceholder: '搜索插件...',
@@ -109,6 +110,18 @@ export const extensionsResources = {
       pageSize: '每页',
       totalItems: '共 {{total}} 条',
     },
+    local: {
+      title: '本地插件库',
+      description: '导入本地 CRX 文件，或通过 Google 商店地址添加插件。',
+      badge: '本地',
+      import: '导入插件',
+      importing: '导入中...',
+      install: '安装',
+      remove: '移除',
+      empty: '暂无本地插件',
+      emptyDescription: '点击“导入插件”将本地浏览器插件加入当前设备的插件库。',
+      noDescription: '暂无描述',
+    },
     dialog: {
       install: {
         title: '安装插件',
@@ -145,6 +158,14 @@ export const extensionsResources = {
         confirm: '确认卸载',
         uninstalling: '卸载中...',
         failed: '卸载失败',
+      },
+      remove: {
+        title: '移除本地插件',
+        description: '您确定要将插件 "{{name}}" 从本地插件库中移除吗？如果该插件已安装，也会同时从当前设备卸载。',
+        cancel: '取消',
+        confirm: '确认移除',
+        removing: '移除中...',
+        failed: '移除失败',
       },
       detail: {
         title: '插件详情',
@@ -189,6 +210,25 @@ export const extensionsResources = {
         enableFailed: '启用失败',
         cancel: '取消',
       },
+      localImport: {
+        title: '导入本地插件',
+        description: '选择本地 CRX 文件，或粘贴 Google 商店地址。',
+        mode: {
+          file: '本地文件',
+          storeUrl: 'Google 商店地址',
+        },
+        crxLabel: 'CRX 文件',
+        crxPlaceholder: '请选择本地 CRX 文件',
+        storeUrlLabel: 'Google 商店地址',
+        storeUrlPlaceholder: '请输入 Chrome Web Store 插件地址',
+        browse: '选择文件',
+        cancel: '取消',
+        confirm: '导入',
+        importing: '导入中...',
+        success: '本地插件导入成功',
+        alreadyExists: '该插件已在本地插件库中',
+        alreadyInstalled: '该插件已经安装',
+      },
     },
   },
   'en-US': {
@@ -198,6 +238,7 @@ export const extensionsResources = {
     viewMode: {
       installed: 'Installed',
       store: 'Extension Store',
+      local: 'Local Plugins',
     },
     header: {
       searchPlaceholder: 'Search extensions...',
@@ -301,6 +342,19 @@ export const extensionsResources = {
       pageSize: 'Per page',
       totalItems: 'Total {{total}}',
     },
+    local: {
+      title: 'Local Extension Library',
+      description: 'Import local CRX files or add plugins through a Google store URL.',
+      badge: 'Local',
+      import: 'Import Plugin',
+      importing: 'Importing...',
+      install: 'Install',
+      remove: 'Remove',
+      empty: 'No local extensions',
+      emptyDescription:
+        'Use "Import Plugin" to add local browser extensions to this device library.',
+      noDescription: 'No description available',
+    },
     dialog: {
       install: {
         title: 'Install Extension',
@@ -320,7 +374,8 @@ export const extensionsResources = {
         noMatch: 'No matching groups found',
         teamInstall: 'Install for Team',
         teamInstallDescription: 'All team members will install this extension in all environments',
-        teamInstallDescriptionForGroup: 'All team members will install this extension in this group',
+        teamInstallDescriptionForGroup:
+          'All team members will install this extension in this group',
         cancel: 'Cancel',
         confirm: 'Install',
         confirmWithCount: 'Install to {{count}} groups',
@@ -336,6 +391,15 @@ export const extensionsResources = {
         confirm: 'Uninstall',
         uninstalling: 'Uninstalling...',
         failed: 'Uninstall failed',
+      },
+      remove: {
+        title: 'Remove Local Plugin',
+        description:
+          'Are you sure you want to remove "{{name}}" from the local library? If it is installed, it will also be removed from this device.',
+        cancel: 'Cancel',
+        confirm: 'Remove',
+        removing: 'Removing...',
+        failed: 'Remove failed',
       },
       detail: {
         title: 'Extension Details',
@@ -369,7 +433,8 @@ export const extensionsResources = {
       toggle: {
         disableTitle: 'Disable Extension',
         disableDescription: 'Are you sure you want to disable "{{name}}"?',
-        disableHint: 'After disabling, this extension will not be loaded in the browser, but will not be uninstalled. You can re-enable it at any time.',
+        disableHint:
+          'After disabling, this extension will not be loaded in the browser, but will not be uninstalled. You can re-enable it at any time.',
         disableConfirm: 'Disable',
         disableProcessing: 'Disabling...',
         disableFailed: 'Disable failed',
@@ -380,6 +445,25 @@ export const extensionsResources = {
         enableProcessing: 'Enabling...',
         enableFailed: 'Enable failed',
         cancel: 'Cancel',
+      },
+      localImport: {
+        title: 'Import Local Plugin',
+        description: 'Choose a local CRX file or paste a Google store URL.',
+        mode: {
+          file: 'Local File',
+          storeUrl: 'Google Store URL',
+        },
+        crxLabel: 'CRX File',
+        crxPlaceholder: 'Select a local CRX file',
+        storeUrlLabel: 'Google Store URL',
+        storeUrlPlaceholder: 'Enter a Chrome Web Store extension URL',
+        browse: 'Browse',
+        cancel: 'Cancel',
+        confirm: 'Import',
+        importing: 'Importing...',
+        success: 'Local plugin imported successfully',
+        alreadyExists: 'This plugin is already in the local library',
+        alreadyInstalled: 'This plugin is already installed',
       },
     },
   },

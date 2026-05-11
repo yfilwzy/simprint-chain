@@ -24,7 +24,7 @@ export function ExtensionStats({
   const { t } = useTranslation('extensions');
 
   return (
-    <div className="flex items-center gap-6 px-4 py-2.5 border-b border-border bg-secondary/30">
+    <div className="flex min-h-14 items-center gap-6 px-4 py-3 border-b border-border bg-secondary/30">
       <div className="flex items-center gap-2">
         <Puzzle className="h-4 w-4 text-primary" />
         <span className="text-xs text-muted-foreground">{t('stats.total')}</span>

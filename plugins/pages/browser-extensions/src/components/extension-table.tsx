@@ -63,12 +63,6 @@ export function ExtensionTable({
       width: 256,
     },
     {
-      id: 'version',
-      header: t('table.headers.version'),
-      cell: () => null,
-      width: 96,
-    },
-    {
       id: 'status',
       header: t('table.headers.status'),
       cell: () => null,
@@ -79,12 +73,6 @@ export function ExtensionTable({
       header: t('table.headers.browser'),
       cell: () => null,
       width: 96,
-    },
-    {
-      id: 'author',
-      header: t('table.headers.author'),
-      cell: () => null,
-      width: 112,
     },
     {
       id: 'groups',
@@ -148,7 +136,7 @@ export function ExtensionTable({
           key={rowKey}
           extension={row}
           isSelected={isSelected}
-          onSelect={(id, selected) => handleSelect(selected)}
+          onSelect={(_id, selected) => handleSelect(selected)}
           onUpdate={onUpdate}
           onUninstall={onUninstall}
           onViewDetails={onViewDetails}

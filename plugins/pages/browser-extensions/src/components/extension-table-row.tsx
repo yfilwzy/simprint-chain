@@ -8,7 +8,6 @@ import {
   ExternalLink,
   Info,
   ShieldCheck,
-  Package,
   Ban,
   Play,
 } from 'lucide-react';
@@ -26,7 +25,7 @@ import {
   DataTableActionsCell,
 } from '@/components/data-table';
 import type { ExtensionItem } from '../types';
-import { getExtensionHomepageUrl } from '../utils/chrome-store';
+import { ExtensionIcon } from './extension-icon';
 
 interface ExtensionTableRowProps {
   extension: ExtensionItem;
@@ -128,34 +127,25 @@ export function ExtensionTableRow({
 
       {/* 名称列 */}
       <DataTableCell>
-        <div className="font-bold flex items-center gap-2">
-          {/* 图标：如果是 URL，则渲染为图片；否则按文本/emoji 渲染；没有则用占位图标 */}
-          {extension.icon ? (
-            typeof extension.icon === 'string' && extension.icon.startsWith('http') ? (
-              <img
-                src={extension.icon}
-                alt=""
-                className="w-5 h-5 rounded object-cover"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = 'none';
-                }}
-              />
-            ) : (
-              <span className="text-lg">{extension.icon}</span>
-            )
-          ) : (
-            <Package className="w-4 h-4 text-muted-foreground/60" />
+        <div className="font-bold flex items-center gap-2 min-w-0">
+          <ExtensionIcon
+            icon={extension.icon}
+            source={extension.source}
+            containerClassName="h-5 w-5 rounded"
+            imageClassName="rounded"
+            textClassName="text-lg"
+            fallbackClassName="h-4 w-4"
+          />
+          <span className="max-w-[150px] truncate">{extension.name}</span>
+          {extension.source === 'local' && (
+            <span className="inline-flex items-center px-1.5 py-0.5 text-[9px] font-semibold uppercase border rounded border-sky-500/30 bg-sky-500/10 text-sky-600">
+              {t('local.badge')}
+            </span>
           )}
-          <span>{extension.name}</span>
         </div>
         <div className="text-[10px] text-muted-foreground line-clamp-1 max-w-xs">
           {extension.description}
         </div>
-      </DataTableCell>
-
-      {/* 版本列 */}
-      <DataTableCell>
-        <span className="font-mono text-[11px] text-muted-foreground">v{extension.version}</span>
       </DataTableCell>
 
       {/* 状态列 */}
@@ -163,11 +153,6 @@ export function ExtensionTableRow({
 
       {/* 浏览器列 */}
       <DataTableCell>{getBrowserBadge()}</DataTableCell>
-
-      {/* 作者列 */}
-      <DataTableCell>
-        <span className="text-[11px] text-muted-foreground">{extension.author || '-'}</span>
-      </DataTableCell>
 
       {/* 分组列 */}
       <DataTableCell>

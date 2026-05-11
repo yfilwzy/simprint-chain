@@ -317,6 +317,8 @@ async fn prepare_start_request(
         None => None,
     };
 
+    let extensions = merge_local_extensions(&app, extensions)?;
+
     let extension_dirs = match extensions {
         Some(extensions) if !extensions.is_empty() => {
             let dirs = extension::install_extensions(
@@ -346,6 +348,31 @@ async fn prepare_start_request(
         window_size,
         extension_dirs,
     })
+}
+
+fn merge_local_extensions(
+    app: &AppHandle,
+    extensions: Option<Vec<super::types::ExtensionInfo>>,
+) -> Result<Option<Vec<super::types::ExtensionInfo>>> {
+    let mut merged = extensions.unwrap_or_default();
+    let local_extensions =
+        crate::services::local_extensions::LocalExtensionService::list_active_extension_infos(app)?;
+
+    for local in local_extensions {
+        let duplicate = merged.iter().any(|existing| {
+            existing.hash.eq_ignore_ascii_case(&local.hash)
+                || existing.extension_id == local.extension_id
+        });
+        if !duplicate {
+            merged.push(local);
+        }
+    }
+
+    if merged.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(merged))
+    }
 }
 
 fn decrypt_accounts(accounts: Vec<AccountInfo>) -> Result<Vec<AccountConfig>> {

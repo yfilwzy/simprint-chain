@@ -1,11 +1,12 @@
 import { useTranslation } from 'react-i18next';
-import { ExternalLink, Globe, Package, Star, Download, User, Code, Monitor } from 'lucide-react';
+import { ExternalLink, Globe, Star, Download, User, Code, Monitor } from 'lucide-react';
 import { FormattedDialog, FormattedDialogFooter } from '@/components/formatted-dialog';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import type { ExtensionItem } from '../types';
 import { getExtensionHomepageUrl } from '../utils/chrome-store';
+import { ExtensionIcon } from './extension-icon';
 
 interface ExtensionHomepageDialogProps {
   open: boolean;
@@ -64,26 +65,13 @@ export function ExtensionHomepageDialog({
         {/* 插件基本信息 */}
         <div className="bg-muted/50 rounded-md p-4 border border-border/50">
           <div className="flex items-start gap-3">
-            {extension.icon ? (
-              typeof extension.icon === 'string' && extension.icon.startsWith('http') ? (
-                <img
-                  src={extension.icon}
-                  alt=""
-                  className="w-12 h-12 rounded object-cover flex-shrink-0"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = 'none';
-                  }}
-                />
-              ) : (
-                <div className="w-12 h-12 rounded flex items-center justify-center text-2xl bg-muted flex-shrink-0">
-                  {extension.icon}
-                </div>
-              )
-            ) : (
-              <div className="w-12 h-12 rounded bg-muted flex items-center justify-center flex-shrink-0">
-                <Package className="h-6 w-6 text-muted-foreground" />
-              </div>
-            )}
+            <ExtensionIcon
+              icon={extension.icon}
+              source={extension.source}
+              containerClassName="h-12 w-12 rounded bg-muted flex-shrink-0"
+              imageClassName="rounded"
+              fallbackClassName="h-6 w-6"
+            />
             <div className="flex-1 min-w-0">
               <h4 className="text-sm font-semibold text-foreground mb-1">{extension.name}</h4>
               {extension.description && (

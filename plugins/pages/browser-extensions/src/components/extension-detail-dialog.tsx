@@ -1,24 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  Loader2,
-  Info,
-  Package,
-  ExternalLink,
-  Shield,
-  Download,
-  Star,
-  Calendar,
-} from 'lucide-react';
+import { Loader2, Info, Package, Shield, Download, Star, Calendar } from 'lucide-react';
 import { FormattedDialog, FormattedDialogFooter } from '@/components/formatted-dialog';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { getExtensionDetail } from '../api';
 import type { Extension } from '../api';
+import type { ExtensionItem } from '../types';
+import { ExtensionIcon } from './extension-icon';
 
 interface ExtensionDetailDialogProps {
   open: boolean;
-  extensionId: string | null;
+  extension: ExtensionItem | null;
   onOpenChange: (open: boolean) => void;
 }
 
@@ -27,33 +20,96 @@ interface ExtensionDetailDialogProps {
  */
 export function ExtensionDetailDialog({
   open,
-  extensionId,
+  extension,
   onOpenChange,
 }: ExtensionDetailDialogProps) {
   const { t } = useTranslation('extensions');
-  const [loading, setLoading] = useState(false);
-  const [extension, setExtension] = useState<Extension | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const knownCategories = new Set([
+    'automation',
+    'security',
+    'productivity',
+    'tools',
+    'media',
+    'social',
+  ]);
+  const [remoteState, setRemoteState] = useState<{
+    key: string | null;
+    detail: Extension | null;
+    error: string | null;
+  }>({
+    key: null,
+    detail: null,
+    error: null,
+  });
+
+  const remoteExtensionKey =
+    open && extension && extension.source !== 'local'
+      ? extension.extensionId || extension.id
+      : null;
+
+  const localExtensionDetail =
+    open && extension?.source === 'local'
+      ? {
+          id: extension.id,
+          recordId: extension.recordId,
+          extensionId: extension.extensionId || extension.id,
+          source: 'local' as const,
+          name: extension.name,
+          description: extension.description,
+          version: extension.version,
+          category: extension.category,
+          browser: extension.browser,
+          author: extension.author,
+          homepage: extension.homepage,
+          icon: extension.icon,
+          downloadUrl: undefined,
+          fileSize: extension.fileSize,
+          downloads: extension.downloads,
+          permissions: extension.permissions,
+          status: extension.status,
+          rating: extension.rating,
+          updatedAt: extension.updatedAt,
+          createdAt: extension.createdAt,
+          hash: extension.hash,
+          scope: extension.scope,
+          groups: extension.groups,
+        }
+      : null;
+
+  const hasMatchingRemoteDetail =
+    remoteExtensionKey !== null &&
+    remoteState.detail !== null &&
+    remoteState.key === remoteExtensionKey;
+  const hasMatchingRemoteError =
+    remoteExtensionKey !== null && remoteState.key === remoteExtensionKey;
+  const loading =
+    remoteExtensionKey !== null && !hasMatchingRemoteDetail && !hasMatchingRemoteError;
+  const error = hasMatchingRemoteError ? remoteState.error : null;
 
   useEffect(() => {
-    if (open && extensionId) {
-      setLoading(true);
-      setError(null);
-      getExtensionDetail(extensionId)
-        .then((data) => {
-          setExtension(data);
-        })
-        .catch((e) => {
-          setError(e instanceof Error ? e.message : '获取扩展详情失败');
-        })
-        .finally(() => {
-          setLoading(false);
-        });
-    } else {
-      setExtension(null);
-      setError(null);
+    if (!remoteExtensionKey || hasMatchingRemoteDetail) {
+      return;
     }
-  }, [open, extensionId]);
+
+    getExtensionDetail(remoteExtensionKey)
+      .then((data) => {
+        setRemoteState({
+          key: remoteExtensionKey,
+          detail: data,
+          error: null,
+        });
+      })
+      .catch((e) => {
+        setRemoteState({
+          key: remoteExtensionKey,
+          detail: null,
+          error: e instanceof Error ? e.message : '获取扩展详情失败',
+        });
+      });
+  }, [hasMatchingRemoteDetail, remoteExtensionKey]);
+
+  const extensionDetail =
+    localExtensionDetail || (hasMatchingRemoteDetail ? remoteState.detail : null);
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return '-';
@@ -78,6 +134,11 @@ export function ExtensionDetailDialog({
     return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   };
 
+  const formatCategory = (category?: string) => {
+    if (!category) return t('store.categories.all');
+    return knownCategories.has(category) ? t(`store.categories.${category}`) : category;
+  };
+
   return (
     <FormattedDialog
       open={open}
@@ -99,44 +160,36 @@ export function ExtensionDetailDialog({
         </div>
       ) : error ? (
         <div className="text-sm text-destructive py-4 px-5">{error}</div>
-      ) : extension ? (
+      ) : extensionDetail ? (
         <ScrollArea className="flex-1 px-5 py-5">
           <div className="space-y-4 pr-4">
             {/* 基本信息 */}
             <div className="space-y-3">
               <div className="flex items-start gap-3">
-                {extension.icon ? (
-                  typeof extension.icon === 'string' && extension.icon.startsWith('http') ? (
-                    <img
-                      src={extension.icon}
-                      alt=""
-                      className="w-16 h-16 rounded-lg"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).style.display = 'none';
-                      }}
-                    />
-                  ) : (
-                    <div className="w-16 h-16 rounded-lg border border-border flex items-center justify-center text-2xl">
-                      {extension.icon}
-                    </div>
-                  )
-                ) : (
-                  <div className="w-16 h-16 rounded-lg border border-border bg-muted flex items-center justify-center">
-                    <Package className="h-8 w-8 text-muted-foreground" />
-                  </div>
-                )}
+                <ExtensionIcon
+                  icon={extensionDetail.icon}
+                  source={extensionDetail.source}
+                  containerClassName="h-16 w-16 rounded-lg border border-border bg-muted"
+                  imageClassName="rounded-lg"
+                  textClassName="text-2xl"
+                  fallbackClassName="h-8 w-8"
+                />
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-base font-semibold text-foreground">{extension.name}</h3>
-                  {extension.author && (
-                    <p className="text-xs text-muted-foreground mt-1">{extension.author}</p>
+                  <h3 className="text-base font-semibold text-foreground">
+                    {extensionDetail.name}
+                  </h3>
+                  {extensionDetail.author && (
+                    <p className="text-xs text-muted-foreground mt-1">{extensionDetail.author}</p>
                   )}
                   <div className="flex items-center gap-2 mt-2">
-                    <span className="text-xs text-muted-foreground">v{extension.version}</span>
-                    {extension.rating && (
+                    <span className="text-xs text-muted-foreground">
+                      v{extensionDetail.version}
+                    </span>
+                    {extensionDetail.rating && (
                       <div className="flex items-center gap-1">
                         <Star className="h-3 w-3 fill-yellow-500 text-yellow-500" />
                         <span className="text-xs text-muted-foreground">
-                          {extension.rating.toFixed(1)}
+                          {extensionDetail.rating.toFixed(1)}
                         </span>
                       </div>
                     )}
@@ -144,8 +197,10 @@ export function ExtensionDetailDialog({
                 </div>
               </div>
 
-              {extension.description && (
-                <p className="text-sm text-foreground leading-relaxed">{extension.description}</p>
+              {extensionDetail.description && (
+                <p className="text-sm text-foreground leading-relaxed">
+                  {extensionDetail.description}
+                </p>
               )}
             </div>
 
@@ -159,9 +214,7 @@ export function ExtensionDetailDialog({
                   </span>
                 </div>
                 <p className="text-sm text-foreground">
-                  {extension.category
-                    ? t(`store.categories.${extension.category}`)
-                    : t('store.categories.all')}
+                  {formatCategory(extensionDetail.category)}
                 </p>
               </div>
 
@@ -172,7 +225,7 @@ export function ExtensionDetailDialog({
                     {t('dialog.detail.browser')}
                   </span>
                 </div>
-                <p className="text-sm text-foreground">{t(`browser.${extension.browser}`)}</p>
+                <p className="text-sm text-foreground">{t(`browser.${extensionDetail.browser}`)}</p>
               </div>
 
               <div className="bg-muted/50 rounded-md p-3 border border-border/50">
@@ -183,7 +236,7 @@ export function ExtensionDetailDialog({
                   </span>
                 </div>
                 <p className="text-sm text-foreground">
-                  {extension.downloads?.toLocaleString() || '-'}
+                  {extensionDetail.downloads?.toLocaleString() || '-'}
                 </p>
               </div>
 
@@ -194,12 +247,14 @@ export function ExtensionDetailDialog({
                     {t('dialog.detail.fileSize')}
                   </span>
                 </div>
-                <p className="text-sm text-foreground">{formatFileSize(extension.fileSize)}</p>
+                <p className="text-sm text-foreground">
+                  {formatFileSize(extensionDetail.fileSize)}
+                </p>
               </div>
             </div>
 
             {/* 权限 */}
-            {extension.permissions && extension.permissions.length > 0 && (
+            {extensionDetail.permissions && extensionDetail.permissions.length > 0 && (
               <div className="bg-muted/50 rounded-md p-3 border border-border/50">
                 <div className="flex items-center gap-2 mb-2">
                   <Shield className="h-3.5 w-3.5 text-muted-foreground" />
@@ -209,7 +264,7 @@ export function ExtensionDetailDialog({
                 </div>
                 <ScrollArea className="h-[120px]">
                   <div className="flex flex-wrap gap-1.5 pr-4">
-                    {extension.permissions.map((permission, index) => (
+                    {extensionDetail.permissions.map((permission, index) => (
                       <span
                         key={index}
                         className="text-xs px-2 py-0.5 bg-background border border-border rounded text-foreground"
@@ -224,7 +279,7 @@ export function ExtensionDetailDialog({
 
             {/* 时间信息 */}
             <div className="grid grid-cols-2 gap-3">
-              {extension.updatedAt && (
+              {extensionDetail.updatedAt && (
                 <div className="bg-muted/50 rounded-md p-3 border border-border/50">
                   <div className="flex items-center gap-2 mb-1">
                     <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
@@ -232,11 +287,11 @@ export function ExtensionDetailDialog({
                       {t('dialog.detail.updatedAt')}
                     </span>
                   </div>
-                  <p className="text-sm text-foreground">{formatDate(extension.updatedAt)}</p>
+                  <p className="text-sm text-foreground">{formatDate(extensionDetail.updatedAt)}</p>
                 </div>
               )}
 
-              {extension.createdAt && (
+              {extensionDetail.createdAt && (
                 <div className="bg-muted/50 rounded-md p-3 border border-border/50">
                   <div className="flex items-center gap-2 mb-1">
                     <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
@@ -244,7 +299,7 @@ export function ExtensionDetailDialog({
                       {t('dialog.detail.createdAt')}
                     </span>
                   </div>
-                  <p className="text-sm text-foreground">{formatDate(extension.createdAt)}</p>
+                  <p className="text-sm text-foreground">{formatDate(extensionDetail.createdAt)}</p>
                 </div>
               )}
             </div>

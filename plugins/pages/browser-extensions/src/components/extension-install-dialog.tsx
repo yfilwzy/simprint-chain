@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, Check, Download, Users, Folder, Search, Package } from 'lucide-react';
+import { Loader2, Check, Download, Users, Folder, Search } from 'lucide-react';
 import { FormattedDialog, FormattedDialogFooter } from '@/components/formatted-dialog';
 import { Button } from '@/components/ui/button';
 import { TextareaInput } from '@/components/textarea-input';
@@ -8,6 +8,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import type { StoreExtension } from '../types';
+import { ExtensionIcon } from './extension-icon';
 
 // 分组项类型
 interface GroupItem {
@@ -104,13 +105,6 @@ export function ExtensionInstallDialog({
   const { t } = useTranslation('extensions');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // 重置状态
-  useEffect(() => {
-    if (open) {
-      setSearchQuery('');
-    }
-  }, [open]);
-
   // 过滤分组
   const filteredGroups = useMemo(() => {
     if (!searchQuery.trim()) return groups;
@@ -120,30 +114,17 @@ export function ExtensionInstallDialog({
     );
   }, [groups, searchQuery]);
 
-  // 渲染图标
-  const renderIcon = () => {
-    if (extension?.icon) {
-      if (typeof extension.icon === 'string' && extension.icon.startsWith('http')) {
-        return (
-          <img
-            src={extension.icon}
-            alt=""
-            className="w-10 h-10 rounded-lg object-cover"
-            onError={(e) => {
-              (e.target as HTMLImageElement).style.display = 'none';
-            }}
-          />
-        );
-      }
-      return <span className="text-2xl">{extension.icon}</span>;
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      setSearchQuery('');
     }
-    return <Package className="w-6 h-6 text-muted-foreground/60" />;
+    onOpenChange(nextOpen);
   };
 
   return (
     <FormattedDialog
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={handleOpenChange}
       header={{
         icon: Download,
         title: t('dialog.install.title'),
@@ -158,7 +139,13 @@ export function ExtensionInstallDialog({
           {/* 插件信息卡片 */}
           <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50 border border-border/50">
             <div className="w-11 h-11 rounded-lg bg-background border border-border/50 flex items-center justify-center shrink-0">
-              {renderIcon()}
+              <ExtensionIcon
+                icon={extension.icon}
+                source={extension.source}
+                containerClassName="h-10 w-10 rounded-lg"
+                imageClassName="rounded-lg"
+                fallbackClassName="h-6 w-6"
+              />
             </div>
             <div className="flex-1 min-w-0">
               <h3 className="font-semibold text-sm text-foreground truncate">{extension.name}</h3>

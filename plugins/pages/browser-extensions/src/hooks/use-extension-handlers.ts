@@ -29,6 +29,7 @@ interface UseExtensionHandlersReturn {
 
   // 卸载相关
   handleUninstall: (id: string, name: string) => void;
+  handleRemove: (id: string, name: string) => void;
   handleConfirmUninstall: () => Promise<void>;
   uninstallDialog: ReturnType<typeof useUninstallDialog>;
 
@@ -87,6 +88,22 @@ export function useExtensionHandlers({
     (id: string) => {
       const ext = extensions.find((e) => e.id === id);
       if (ext) {
+        if (ext.source === 'local') {
+          void operations
+            .installExtension(
+              {
+                ...ext,
+                isInstalled: ext.status === 'installed' || ext.status === 'update',
+              },
+              [],
+              false
+            )
+            .catch((e) => {
+              toast.error(e instanceof Error ? e.message : '安装失败');
+            });
+          return;
+        }
+
         installDialog.openInstallDialog({
           ...ext,
           isInstalled: ext.status === 'installed' || ext.status === 'update',
@@ -112,7 +129,7 @@ export function useExtensionHandlers({
 
   // 更新处理
   const handleUpdate = useCallback(
-    async (id: string) => {
+    async (_id: string) => {
       // 直接提示检查通过
       toast.success(t('update.checkPassed'));
     },
@@ -121,7 +138,7 @@ export function useExtensionHandlers({
 
   // 卸载处理
   const handleUninstall = useCallback(
-    (id: string, name: string) => {
+    (id: string, _name: string) => {
       const ext = extensions.find((e) => e.id === id);
       if (ext) {
         uninstallDialog.openUninstallDialog(ext);
@@ -132,16 +149,32 @@ export function useExtensionHandlers({
 
   const handleConfirmUninstall = useCallback(async () => {
     if (!uninstallDialog.uninstallingExt) return;
-    await operations.uninstallExtension(uninstallDialog.uninstallingExt);
+    if (uninstallDialog.action === 'remove') {
+      await operations.removeExtension(uninstallDialog.uninstallingExt);
+    } else {
+      await operations.uninstallExtension(uninstallDialog.uninstallingExt);
+    }
     uninstallDialog.closeUninstallDialog();
   }, [uninstallDialog, operations]);
 
+  const handleRemove = useCallback(
+    (id: string, _name: string) => {
+      const ext = extensions.find((e) => e.id === id);
+      if (ext) {
+        uninstallDialog.openRemoveDialog(ext);
+      }
+    },
+    [extensions, uninstallDialog]
+  );
+
   // 批量操作处理
   const handleBatchUpdate = useCallback(async () => {
-    const ids = Array.from(selection.selectedIds);
-    await operations.batchUpdate(ids);
+    const selectedExtensions = paginatedExtensions.filter((ext) =>
+      selection.selectedIds.has(ext.id)
+    );
+    await operations.batchUpdate(selectedExtensions);
     selection.clearSelection();
-  }, [selection, operations]);
+  }, [paginatedExtensions, selection, operations]);
 
   const handleBatchUninstall = useCallback(() => {
     batchUninstallDialog.openBatchUninstallDialog();
@@ -160,9 +193,12 @@ export function useExtensionHandlers({
   // 其他操作
   const handleViewDetails = useCallback(
     (id: string) => {
-      detailDialog.openDetailDialog(id);
+      const ext = extensions.find((item) => item.id === id);
+      if (ext) {
+        detailDialog.openDetailDialog(ext);
+      }
     },
-    [detailDialog]
+    [detailDialog, extensions]
   );
 
   const handleHomepage = useCallback(
@@ -178,7 +214,7 @@ export function useExtensionHandlers({
   );
 
   const handleSecurityCheck = useCallback(
-    (id: string) => {
+    (_id: string) => {
       // 直接提示检查通过
       toast.success(t('securityCheck.passed'));
     },
@@ -187,7 +223,7 @@ export function useExtensionHandlers({
 
   // 禁用/启用处理
   const handleDisable = useCallback(
-    (id: string, name: string) => {
+    (id: string, _name: string) => {
       const ext = extensions.find((e) => e.id === id);
       if (ext) {
         toggleDialog.openToggleDialog(ext, 'disable');
@@ -197,7 +233,7 @@ export function useExtensionHandlers({
   );
 
   const handleEnable = useCallback(
-    (id: string, name: string) => {
+    (id: string, _name: string) => {
       const ext = extensions.find((e) => e.id === id);
       if (ext) {
         toggleDialog.openToggleDialog(ext, 'enable');
@@ -209,9 +245,9 @@ export function useExtensionHandlers({
   const handleConfirmToggle = useCallback(async () => {
     if (!toggleDialog.togglingExt) return;
     if (toggleDialog.toggleAction === 'disable') {
-      await operations.disableExtension(toggleDialog.togglingExt.id);
+      await operations.disableExtension(toggleDialog.togglingExt);
     } else {
-      await operations.enableExtension(toggleDialog.togglingExt.id);
+      await operations.enableExtension(toggleDialog.togglingExt);
     }
     toggleDialog.closeToggleDialog();
   }, [toggleDialog, operations]);
@@ -223,6 +259,7 @@ export function useExtensionHandlers({
     installing: operations.installing,
     handleUpdate,
     handleUninstall,
+    handleRemove,
     handleConfirmUninstall,
     uninstallDialog,
     handleBatchUpdate,

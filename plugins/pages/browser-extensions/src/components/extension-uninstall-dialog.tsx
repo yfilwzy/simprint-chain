@@ -1,14 +1,16 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { Trash2, X, Loader2, Package, Star } from 'lucide-react';
+import { Trash2, X, Loader2, Star } from 'lucide-react';
 import { FormattedDialog, FormattedDialogFooter } from '@/components/formatted-dialog';
 import { Button } from '@/components/ui/button';
 import type { ExtensionItem } from '../types';
+import { ExtensionIcon } from './extension-icon';
 
 interface ExtensionUninstallDialogProps {
   open: boolean;
   extension: ExtensionItem | null;
+  action?: 'uninstall' | 'remove';
   onOpenChange: (open: boolean) => void;
   onConfirm: () => Promise<void>;
 }
@@ -19,11 +21,22 @@ interface ExtensionUninstallDialogProps {
 export function ExtensionUninstallDialog({
   open,
   extension,
+  action = 'uninstall',
   onOpenChange,
   onConfirm,
 }: ExtensionUninstallDialogProps) {
   const { t } = useTranslation('extensions');
   const [uninstalling, setUninstalling] = useState(false);
+  const isRemove = action === 'remove';
+  const title = isRemove ? t('dialog.remove.title') : t('dialog.uninstall.title');
+  const description = isRemove
+    ? t('dialog.remove.description', { name: extension?.name })
+    : t('dialog.uninstall.description', { name: extension?.name });
+  const processingText = isRemove
+    ? t('dialog.remove.removing')
+    : t('dialog.uninstall.uninstalling');
+  const confirmText = isRemove ? t('dialog.remove.confirm') : t('dialog.uninstall.confirm');
+  const failedText = isRemove ? t('dialog.remove.failed') : t('dialog.uninstall.failed');
 
   const handleUninstall = async () => {
     if (!extension) return;
@@ -32,7 +45,7 @@ export function ExtensionUninstallDialog({
       await onConfirm();
       onOpenChange(false);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t('dialog.uninstall.failed'));
+      toast.error(e instanceof Error ? e.message : failedText);
     } finally {
       setUninstalling(false);
     }
@@ -48,8 +61,8 @@ export function ExtensionUninstallDialog({
       header={{
         icon: Trash2,
         iconColor: 'text-destructive',
-        title: t('dialog.uninstall.title'),
-        description: t('dialog.uninstall.description', { name: extension.name }),
+        title,
+        description,
         gradient: 'bg-gradient-to-r from-red-500/10 via-rose-500/10 to-red-500/10',
         className: 'border-b border-destructive/20',
       }}
@@ -59,27 +72,14 @@ export function ExtensionUninstallDialog({
         {/* 扩展信息卡片 */}
         <div className="bg-muted/50 rounded-md p-4 border border-border/50">
           <div className="flex items-start gap-3">
-            {/* 图标 */}
-            {extension.icon ? (
-              typeof extension.icon === 'string' && extension.icon.startsWith('http') ? (
-                <img
-                  src={extension.icon}
-                  alt=""
-                  className="w-12 h-12 rounded-lg object-cover border border-border"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = 'none';
-                  }}
-                />
-              ) : (
-                <div className="w-12 h-12 rounded-lg border border-border flex items-center justify-center text-xl bg-background">
-                  {extension.icon}
-                </div>
-              )
-            ) : (
-              <div className="w-12 h-12 rounded-lg border border-border bg-muted flex items-center justify-center">
-                <Package className="h-6 w-6 text-muted-foreground" />
-              </div>
-            )}
+            <ExtensionIcon
+              icon={extension.icon}
+              source={extension.source}
+              containerClassName="h-12 w-12 rounded-lg border border-border bg-background"
+              imageClassName="rounded-lg"
+              textClassName="text-xl"
+              fallbackClassName="h-6 w-6"
+            />
 
             {/* 信息 */}
             <div className="flex-1 min-w-0">
@@ -127,12 +127,12 @@ export function ExtensionUninstallDialog({
           {uninstalling ? (
             <>
               <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-              {t('dialog.uninstall.uninstalling')}
+              {processingText}
             </>
           ) : (
             <>
               <Trash2 className="h-4 w-4 mr-1.5" />
-              {t('dialog.uninstall.confirm')}
+              {confirmText}
             </>
           )}
         </Button>

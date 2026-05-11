@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { Download, CheckCircle2, Star, Users, ArrowUpDown, Package, SearchX } from 'lucide-react';
+import { Download, CheckCircle2, Star, Users, ArrowUpDown, SearchX } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import {
@@ -21,6 +21,7 @@ import {
 
 import type { StoreExtension, SortOption } from '../types';
 import { STORE_PAGE_SIZE_OPTIONS } from '../constants';
+import { ExtensionIcon } from './extension-icon';
 
 export type { StoreExtension };
 
@@ -66,6 +67,7 @@ function ExtensionCard({
   onInstall: (id: string) => void;
 }) {
   const { t } = useTranslation('extensions');
+  const isInstalled = extension.status === 'installed' || extension.status === 'update';
 
   const categoryBadge = extension.category ? (
     <span
@@ -75,32 +77,18 @@ function ExtensionCard({
     </span>
   ) : null;
 
-  // 渲染图标
-  const renderIcon = () => {
-    if (extension.icon) {
-      if (typeof extension.icon === 'string' && extension.icon.startsWith('http')) {
-        return (
-          <img
-            src={extension.icon}
-            alt=""
-            className="w-9 h-9 rounded-md object-cover"
-            onError={(e) => {
-              (e.target as HTMLImageElement).style.display = 'none';
-            }}
-          />
-        );
-      }
-      return <span className="text-2xl">{extension.icon}</span>;
-    }
-    return <Package className="w-6 h-6 text-muted-foreground/60" />;
-  };
-
   return (
     <div className="group relative bg-card border border-border/60 rounded-xl p-4 hover:border-primary/40 hover:shadow-lg hover:shadow-primary/5 transition-all duration-200">
       {/* 头部：图标 + 名称 + 分类 */}
       <div className="flex items-start gap-3 mb-3">
         <div className="w-11 h-11 rounded-lg bg-muted/60 border border-border/50 flex items-center justify-center shrink-0 group-hover:border-primary/30 transition-colors">
-          {renderIcon()}
+          <ExtensionIcon
+            icon={extension.icon}
+            source={extension.source}
+            containerClassName="h-9 w-9 rounded-md"
+            imageClassName="rounded-md"
+            fallbackClassName="h-6 w-6"
+          />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-0.5">
@@ -139,7 +127,7 @@ function ExtensionCard({
 
       {/* 操作按钮 */}
       <div className="flex items-center justify-end pt-3 border-t border-border/40">
-        {extension.isInstalled ? (
+        {isInstalled ? (
           <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
             <CheckCircle2 className="h-3.5 w-3.5" />
             {t('store.installed')}
@@ -225,7 +213,7 @@ export function ExtensionStore({
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
       {/* 筛选栏 */}
-      <div className="shrink-0 px-4 py-3 border-b border-border bg-muted/30 flex items-center gap-4">
+      <div className="shrink-0 min-h-14 px-4 py-3 border-b border-border bg-muted/30 flex items-center gap-4">
         {/* 分类筛选 */}
         <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none">
           {categories.map((cat) => (

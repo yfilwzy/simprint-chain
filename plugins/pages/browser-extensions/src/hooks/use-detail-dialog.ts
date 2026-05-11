@@ -1,9 +1,11 @@
 import { useState } from 'react';
 
+import type { ExtensionItem } from '../types';
+
 interface UseDetailDialogReturn {
   detailDialogOpen: boolean;
-  viewingExtensionId: string | null;
-  openDetailDialog: (extensionId: string) => void;
+  viewingExtension: ExtensionItem | null;
+  openDetailDialog: (extension: ExtensionItem) => void;
   closeDetailDialog: () => void;
 }
 
@@ -12,21 +14,21 @@ interface UseDetailDialogReturn {
  */
 export function useDetailDialog(): UseDetailDialogReturn {
   const [detailDialogOpen, setDetailDialogOpen] = useState(false);
-  const [viewingExtensionId, setViewingExtensionId] = useState<string | null>(null);
+  const [viewingExtension, setViewingExtension] = useState<ExtensionItem | null>(null);
 
-  const openDetailDialog = (extensionId: string) => {
-    setViewingExtensionId(extensionId);
+  const openDetailDialog = (extension: ExtensionItem) => {
+    setViewingExtension(extension);
     setDetailDialogOpen(true);
   };
 
   const closeDetailDialog = () => {
     setDetailDialogOpen(false);
-    setViewingExtensionId(null);
+    setViewingExtension(null);
   };
 
   return {
     detailDialogOpen,
-    viewingExtensionId,
+    viewingExtension,
     openDetailDialog,
     closeDetailDialog,
   };

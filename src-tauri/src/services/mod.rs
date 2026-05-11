@@ -11,6 +11,7 @@ pub mod auth;
 pub mod connectivity;
 pub mod environment;
 pub mod file_system;
+pub mod local_extensions;
 pub mod runtime_updater;
 pub mod updater;
 pub mod window;

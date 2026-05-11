@@ -62,14 +62,10 @@ pub async fn http_post_form(
     if let Some(files_map) = files {
         for (field_name, file_list) in files_map {
             for file_info in file_list {
-                let mut file = File::open(&file_info.path)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                let mut file = File::open(&file_info.path).await.map_err(|e| e.to_string())?;
 
                 let mut buffer = Vec::new();
-                file.read_to_end(&mut buffer)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                file.read_to_end(&mut buffer).await.map_err(|e| e.to_string())?;
 
                 // 确定文件名
                 let file_name = file_info.file_name.clone().unwrap_or_else(|| {
@@ -101,15 +97,15 @@ pub async fn http_post_form(
     }
 
     let ctx = AppContext::get();
-    ctx.main_server_client
-        .post_form(&url, form)
-        .await
-        .map_err(|e| e.to_string())
+    ctx.main_server_client.post_form(&url, form).await.map_err(|e| e.to_string())
 }
 
 /// HTTP PUT 请求
 #[tauri::command]
-pub async fn http_put(url: String, data: Option<Value>) -> std::result::Result<JsonRespnse, String> {
+pub async fn http_put(
+    url: String,
+    data: Option<Value>,
+) -> std::result::Result<JsonRespnse, String> {
     let ctx = AppContext::get();
     ctx.main_server_client.put(&url, &data).await.map_err(|e| e.to_string())
 }
@@ -118,10 +114,7 @@ pub async fn http_put(url: String, data: Option<Value>) -> std::result::Result<J
 #[tauri::command]
 pub async fn http_delete(url: String, data: Value) -> std::result::Result<JsonRespnse, String> {
     let ctx = AppContext::get();
-    ctx.main_server_client
-        .delete(&url, &data)
-        .await
-        .map_err(|e| e.to_string())
+    ctx.main_server_client.delete(&url, &data).await.map_err(|e| e.to_string())
 }
 
 // ============================================================================

@@ -7,8 +7,8 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 interface ExtensionHeaderProps {
   searchQuery: string;
   onSearchChange: (query: string) => void;
-  viewMode: 'installed' | 'store';
-  onViewModeChange: (mode: 'installed' | 'store') => void;
+  viewMode: 'installed' | 'store' | 'local';
+  onViewModeChange: (mode: 'installed' | 'store' | 'local') => void;
   installedCount: number;
 }
 
@@ -54,13 +54,19 @@ export function ExtensionHeader({
 
       {/* 右侧：Tab */}
       <div className="flex items-center gap-3">
-        <Tabs value={viewMode} onValueChange={(v) => onViewModeChange(v as 'installed' | 'store')}>
+        <Tabs
+          value={viewMode}
+          onValueChange={(v) => onViewModeChange(v as 'installed' | 'store' | 'local')}
+        >
           <TabsList className="h-8 bg-secondary">
             <TabsTrigger value="installed" className="text-xs px-4 h-7">
               {t('viewMode.installed')} ({installedCount})
             </TabsTrigger>
             <TabsTrigger value="store" className="text-xs px-4 h-7">
               {t('viewMode.store')}
+            </TabsTrigger>
+            <TabsTrigger value="local" className="text-xs px-4 h-7">
+              {t('viewMode.local')}
             </TabsTrigger>
           </TabsList>
         </Tabs>

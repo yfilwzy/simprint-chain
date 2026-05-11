@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { listExtensions, listInstalledExtensions, type Extension } from '../api';
+import { listExtensions, listInstalledExtensions, listLocalExtensions, type Extension } from '../api';
 import type { ExtensionItem } from '../types';
 
 interface UseExtensionsParams {
@@ -28,19 +28,27 @@ function toExtensionItem(ext: Extension): ExtensionItem {
     id: ext.extensionId,
     // 保留后端 uuid 以便需要时使用
     uuid: ext.id,
+    recordId: ext.recordId,
+    extensionId: ext.extensionId,
     name: ext.name,
     description: ext.description,
     version: ext.version,
     icon: ext.icon || '',
     browser: ext.browser as ExtensionItem['browser'],
     status: ext.status,
+    source: ext.source,
     author: ext.author,
     homepage: ext.homepage,
     downloads: ext.downloads,
     rating: ext.rating,
     updatedAt: ext.updatedAt,
+    createdAt: ext.createdAt,
+    fileSize: ext.fileSize,
+    permissions: ext.permissions,
+    hash: ext.hash,
     scope: ext.scope, // 保留 scope 信息
     groups: ext.groups, // 关联的分组列表
+    category: ext.category,
   };
 }
 
@@ -51,7 +59,7 @@ function toExtensionItem(ext: Extension): ExtensionItem {
  * @param scope - 范围过滤：'all' | 'user' | 'team'（仅用于 installed 模式）
  */
 export function useExtensions(
-  mode: 'all' | 'installed' = 'all',
+  mode: 'all' | 'installed' | 'local' = 'all',
   scope: 'all' | 'user' | 'team' = 'all',
   params?: UseExtensionsParams
 ): UseExtensionsReturn {
@@ -66,6 +74,10 @@ export function useExtensions(
     try {
       if (mode === 'installed') {
         const data = await listInstalledExtensions(scope);
+        setExtensions(data.map(toExtensionItem));
+        setTotal(data.length);
+      } else if (mode === 'local') {
+        const data = await listLocalExtensions();
         setExtensions(data.map(toExtensionItem));
         setTotal(data.length);
       } else {
