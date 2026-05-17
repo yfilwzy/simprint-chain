@@ -424,16 +424,20 @@ export function CreateWindowContent({
               <NetworkLocationForm
                 basicSettings={windowConfig.basicSettings}
                 advancedSettings={windowConfig.advancedFingerprintSettings}
+                proxySourceMode={windowConfig.windowInfo.proxySourceMode}
                 proxyUuids={windowConfig.windowInfo.proxyUuids}
-                createCount={isEditMode ? undefined : createCount}
+                localProxyNodeNames={windowConfig.windowInfo.localProxyNodeNames}
+                createCount={isEditMode ? 1 : createCount}
                 onBasicSettingsChange={(value) => handleConfigUpdate('basicSettings', value)}
                 onAdvancedSettingsChange={(value) =>
                   handleConfigUpdate('advancedFingerprintSettings', value)
                 }
-                onProxyUuidsChange={(value) =>
+                onProxySelectionChange={(value) =>
                   handleConfigUpdate('windowInfo', {
                     ...windowConfig.windowInfo,
-                    proxyUuids: value,
+                    proxySourceMode: value.mode,
+                    proxyUuids: value.remoteProxyUuids,
+                    localProxyNodeNames: value.localProxyNodeNames,
                   })
                 }
               />

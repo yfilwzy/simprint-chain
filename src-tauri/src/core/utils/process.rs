@@ -15,6 +15,44 @@ pub struct FindProcessResult {
     pub process: Option<ProcessInfo>,
 }
 
+fn normalize_process_identity(value: &str) -> String {
+    let normalized = value.trim().to_ascii_lowercase();
+    normalized
+        .strip_suffix(".exe")
+        .unwrap_or(&normalized)
+        .to_string()
+}
+
+fn process_matches_candidate(
+    process_name: &str,
+    executable_path: &Option<PathBuf>,
+    candidate: &str,
+) -> bool {
+    let candidate = normalize_process_identity(candidate);
+
+    if normalize_process_identity(process_name) == candidate {
+        return true;
+    }
+
+    let Some(executable_path) = executable_path.as_ref() else {
+        return false;
+    };
+
+    if let Some(file_name) = executable_path.file_name() {
+        if normalize_process_identity(&file_name.to_string_lossy()) == candidate {
+            return true;
+        }
+    }
+
+    if let Some(file_stem) = executable_path.file_stem() {
+        if normalize_process_identity(&file_stem.to_string_lossy()) == candidate {
+            return true;
+        }
+    }
+
+    false
+}
+
 #[cfg(target_os = "windows")]
 pub mod finder {
     use super::*;
@@ -185,12 +223,16 @@ pub fn kill_process(pid: u32) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn find_process(names: Vec<String>) -> Result<FindProcessResult, String> {
+pub fn find_process(
+    names: Vec<String>,
+    match_all: Option<bool>,
+) -> Result<FindProcessResult, String> {
     let normalized_names = names
         .into_iter()
         .map(|name| name.trim().to_string())
         .filter(|name| !name.is_empty())
         .collect::<Vec<_>>();
+    let require_all = match_all.unwrap_or(false);
 
     if normalized_names.is_empty() {
         return Ok(FindProcessResult {
@@ -201,23 +243,36 @@ pub fn find_process(names: Vec<String>) -> Result<FindProcessResult, String> {
 
     let matches = finder::find_process(&normalized_names);
 
-    for candidate in &normalized_names {
-        let candidate_lower = candidate.to_ascii_lowercase();
-        if let Some((process_name, pid, executable_path)) = matches
-            .iter()
-            .find(|(name, _, _)| name.to_ascii_lowercase().contains(&candidate_lower))
-        {
-            return Ok(FindProcessResult {
-                running: true,
-                process: Some(ProcessInfo {
+    let matched_processes = normalized_names
+        .iter()
+        .filter_map(|candidate| {
+            matches
+                .iter()
+                .find(|(process_name, _, executable_path)| {
+                    process_matches_candidate(process_name, executable_path, candidate)
+                })
+                .map(|(process_name, pid, executable_path)| ProcessInfo {
                     process_name: process_name.clone(),
                     pid: *pid,
                     executable_path: executable_path
                         .as_ref()
                         .map(|path| path.to_string_lossy().to_string()),
-                }),
-            });
-        }
+                })
+        })
+        .collect::<Vec<_>>();
+
+    if require_all {
+        return Ok(FindProcessResult {
+            running: matched_processes.len() == normalized_names.len(),
+            process: matched_processes.into_iter().next(),
+        });
+    }
+
+    if let Some(process) = matched_processes.into_iter().next() {
+        return Ok(FindProcessResult {
+            running: true,
+            process: Some(process),
+        });
     }
 
     Ok(FindProcessResult {

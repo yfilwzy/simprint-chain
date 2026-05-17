@@ -22,3 +22,12 @@ export type { TagColor } from './colors';
 
 // 分组颜色
 export { getGroupColor } from './group-color';
+
+// 本地代理
+export {
+  getLocalMihomoProxyRecords,
+  mapLocalMihomoProxyToProxyCandidate,
+  mapLocalMihomoProxyToProxySummary,
+  buildMissingLocalProxySummary,
+} from './local-proxy';
+export type { MihomoLocalProxyRecord, EnvironmentProxyCandidate } from './local-proxy';

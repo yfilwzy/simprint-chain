@@ -30,7 +30,6 @@ import { FreeQuotaUsage } from './free-quota-usage';
 import { getGeneralSettings, useMihomoRuntimeStore } from '../../../../services/store/src';
 import { ClashIcon } from '../../../../pages/proxy-center/src/mihomo/clash-icon';
 import { MihomoConnectDialog } from '../../../../pages/proxy-center/src/mihomo/mihomo-connect-dialog';
-import { getMihomoStatus } from '../../../../pages/proxy-center/src/mihomo/api';
 
 interface NavItemData {
   label: string;
@@ -572,22 +571,9 @@ export const AppSidebar: React.FC = () => {
   const [isAnimating, setIsAnimating] = useState(false);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [mihomoDialogOpen, setMihomoDialogOpen] = useState(false);
-  const [mihomoAttached, setMihomoAttached] = useState(false);
   const mihomoRunning = useMihomoRuntimeStore((state) => state.running);
+  const mihomoAttached = useMihomoRuntimeStore((state) => state.attached);
   const mihomoCheckedAt = useMihomoRuntimeStore((state) => state.checkedAt);
-
-  const refreshMihomoAttached = useRef(async (cancelledRef?: { current: boolean }) => {
-    try {
-      const status = await getMihomoStatus();
-      if (!cancelledRef?.current) {
-        setMihomoAttached(status.attached);
-      }
-    } catch {
-      if (!cancelledRef?.current) {
-        setMihomoAttached(false);
-      }
-    }
-  });
 
   useEffect(() => {
     let cancelled = false;
@@ -610,30 +596,21 @@ export const AppSidebar: React.FC = () => {
     };
   }, []);
 
-  useEffect(() => {
-    const cancelledRef = { current: false };
-
-    if (!mihomoRunning) {
-      setMihomoAttached(false);
-      return () => {
-        cancelledRef.current = true;
-      };
-    }
-
-    void refreshMihomoAttached.current(cancelledRef);
-
-    return () => {
-      cancelledRef.current = true;
-    };
-  }, [location.pathname, mihomoRunning]);
-
-  const handleOpenMihomo = () => {
+  const handleOpenMihomo = async () => {
     if (!mihomoRunning) {
       navigate('/proxy?mode=local');
       return;
     }
 
-    if (mihomoAttached) {
+    await useMihomoRuntimeStore.getState().refresh();
+    const { running, attached } = useMihomoRuntimeStore.getState();
+
+    if (!running) {
+      navigate('/proxy?mode=local');
+      return;
+    }
+
+    if (attached) {
       navigate('/proxy/mihomo');
       return;
     }
@@ -731,7 +708,7 @@ export const AppSidebar: React.FC = () => {
         open={mihomoDialogOpen}
         onOpenChange={setMihomoDialogOpen}
         onConnected={() => {
-          setMihomoAttached(true);
+          void useMihomoRuntimeStore.getState().refresh();
           navigate('/proxy/mihomo');
         }}
       />

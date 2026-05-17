@@ -57,9 +57,17 @@ impl MihomoManager {
 
     pub async fn status(&self, app: &tauri::AppHandle) -> MihomoStatus {
         let persisted = load_connection_config(app);
+        let attached = if let Some(config) = persisted.as_ref() {
+            match MihomoClient::new(config) {
+                Ok(client) => client.fetch_version().await.is_ok(),
+                Err(_) => false,
+            }
+        } else {
+            false
+        };
 
         MihomoStatus {
-            attached: persisted.is_some(),
+            attached,
             controller: persisted.as_ref().map(|config| config.controller.clone()),
             config_path: persisted.as_ref().map(|config| config.config_path.clone()),
         }

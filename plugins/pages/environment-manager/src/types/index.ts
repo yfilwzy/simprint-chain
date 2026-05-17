@@ -16,10 +16,15 @@ export interface ProxySummary {
   port: number;
   proxy_type: string;
   country?: string;
+  country_code?: string;
   city?: string;
   status: string;
   latency?: number;
   last_check_ip?: string;
+  source?: 'remote' | 'local';
+  node_name?: string;
+  listener_name?: string;
+  local_missing?: boolean;
 }
 
 // 标签摘要

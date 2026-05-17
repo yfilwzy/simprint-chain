@@ -77,8 +77,14 @@ export function WindowSummary({ config, onRandomize }: WindowSummaryProps) {
           <SummaryItem
             label={t('windowInfo.proxyIp')}
             value={
-              config.windowInfo.proxyUuids && config.windowInfo.proxyUuids.length > 0
-                ? `${config.windowInfo.proxyUuids.length} ${t('summary.proxiesConfigured')}`
+              (config.windowInfo.proxySourceMode === 'local'
+                ? config.windowInfo.localProxyNodeNames.length
+                : config.windowInfo.proxyUuids.length) > 0
+                ? `${
+                    config.windowInfo.proxySourceMode === 'local'
+                      ? config.windowInfo.localProxyNodeNames.length
+                      : config.windowInfo.proxyUuids.length
+                  } ${t('summary.proxiesConfigured')}`
                 : t('windowInfo.noProxy')
             }
           />

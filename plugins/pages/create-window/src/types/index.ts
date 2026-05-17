@@ -34,6 +34,8 @@ export type WindowSizeMode = 'custom' | 'fullscreen';
 
 export type PositionQuadrant = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
+export type ProxySourceMode = 'remote' | 'local';
+
 export interface CookieGroup {
   site: string;
   cookieText: string;
@@ -48,7 +50,9 @@ export interface WindowInfo {
   kernel: string; // 浏览器内核
   userAgent: string;
   searchEngine: string;
+  proxySourceMode: ProxySourceMode;
   proxyUuids: string[]; // 代理 UUID 列表（用于批量创建）
+  localProxyNodeNames: string[]; // 本地代理节点名称列表（用于批量创建）
   accountUuids: string[]; // 平台账号 UUID 列表
   urls: string[];
   cookies: CookieGroup[];

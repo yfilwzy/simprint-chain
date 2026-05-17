@@ -1,7 +1,11 @@
 import { create } from 'zustand';
 import { invoke } from '@/lib/tauri';
 
-const MIHOMO_PROCESS_NAMES = ['clash verge', 'clash-verge', 'clash-verge-rev', 'mihomo'];
+const MIHOMO_PROCESS_GROUPS = [
+  ['clash-verge', 'clash-verge-service'],
+  ['clash-verge-rev', 'clash-verge-service'],
+  ['mihomo'],
+];
 const MIHOMO_PROCESS_POLL_INTERVAL_MS = 30_000;
 
 interface ProcessInfo {
@@ -15,8 +19,17 @@ interface FindProcessResult {
   process: ProcessInfo | null;
 }
 
+interface MihomoStatus {
+  attached: boolean;
+  controller: string | null;
+  config_path?: string | null;
+}
+
 interface MihomoRuntimeState {
   running: boolean;
+  attached: boolean;
+  controller: string | null;
+  configPath: string | null;
   processName: string | null;
   pid: number | null;
   executablePath: string | null;
@@ -32,11 +45,27 @@ interface MihomoRuntimeState {
 let pollingTimer: number | null = null;
 
 async function queryMihomoProcess(): Promise<FindProcessResult> {
-  return invoke<FindProcessResult>('find_process', { names: MIHOMO_PROCESS_NAMES });
+  for (const names of MIHOMO_PROCESS_GROUPS) {
+    const result = await invoke<FindProcessResult>('find_process', {
+      names,
+      matchAll: names.length > 1,
+    });
+    if (result.running) {
+      return result;
+    }
+  }
+
+  return {
+    running: false,
+    process: null,
+  };
 }
 
 export const useMihomoRuntimeStore = create<MihomoRuntimeState>((set, get) => ({
   running: false,
+  attached: false,
+  controller: null,
+  configPath: null,
   processName: null,
   pid: null,
   executablePath: null,
@@ -48,8 +77,35 @@ export const useMihomoRuntimeStore = create<MihomoRuntimeState>((set, get) => ({
     set({ checking: true });
     try {
       const result = await queryMihomoProcess();
+
+      if (!result.running) {
+        set({
+          running: false,
+          attached: false,
+          controller: null,
+          configPath: null,
+          processName: null,
+          pid: null,
+          executablePath: null,
+          checkedAt: Date.now(),
+          checking: false,
+          error: null,
+        });
+        return;
+      }
+
+      let status: MihomoStatus | null = null;
+      try {
+        status = await invoke<MihomoStatus>('get_mihomo_status');
+      } catch {
+        status = null;
+      }
+
       set({
-        running: result.running,
+        running: true,
+        attached: status?.attached ?? false,
+        controller: status?.controller ?? null,
+        configPath: status?.config_path ?? null,
         processName: result.process?.process_name ?? null,
         pid: result.process?.pid ?? null,
         executablePath: result.process?.executable_path ?? null,
@@ -60,6 +116,9 @@ export const useMihomoRuntimeStore = create<MihomoRuntimeState>((set, get) => ({
     } catch (error) {
       set({
         running: false,
+        attached: false,
+        controller: null,
+        configPath: null,
         processName: null,
         pid: null,
         executablePath: null,

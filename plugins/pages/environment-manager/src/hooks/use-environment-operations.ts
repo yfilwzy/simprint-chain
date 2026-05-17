@@ -15,6 +15,7 @@ import {
   createTag,
   updateTag,
   deleteTag,
+  refreshEnvironmentProxy,
   setEnvironmentProxy,
   createGroup,
   restoreEnvironment,
@@ -22,6 +23,7 @@ import {
   permanentDeleteEnvironment,
   batchPermanentDeleteEnvironments,
 } from '../api';
+import { removeEnvironmentLocalProxyBinding } from '../../../../services/store/src';
 import {
   type KernelPrepareStatusPayload,
   KERNEL_PREPARE_STATUS_EVENT,
@@ -267,7 +269,11 @@ export function useEnvironmentOperations(onComplete?: () => void): UseEnvironmen
   };
 
   const removeProxyOp = async (environmentId: string): Promise<void> => {
+    await removeEnvironmentLocalProxyBinding(environmentId);
     await setEnvironmentProxy({ uuid: environmentId, proxy_uuid: undefined });
+    if (isRunning(environmentId)) {
+      await refreshEnvironmentProxy(environmentId, null);
+    }
     onComplete?.();
   };
 

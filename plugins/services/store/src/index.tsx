@@ -61,6 +61,15 @@ export {
   DEFAULT_STORAGE_SETTINGS,
 } from './stores/storage-settings';
 export type { DirectorySizeCache, StorageSettings, StoragePathKey } from './stores/storage-settings';
+export {
+  getEnvironmentLocalProxyBindings,
+  setEnvironmentLocalProxyBinding,
+  removeEnvironmentLocalProxyBinding,
+} from './stores/environment-local-proxy-binding';
+export type {
+  EnvironmentLocalProxyBinding,
+  EnvironmentLocalProxyBindingMap,
+} from './stores/environment-local-proxy-binding';
 export { useMihomoRuntimeStore } from './stores/mihomo-runtime';
 
 /**

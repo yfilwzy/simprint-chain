@@ -23,7 +23,7 @@ import { useProxySelection } from './hooks/use-proxy-selection';
 import { selectAndReadProxyFile, type ImportProxyItem } from './utils/import-export';
 import type { Proxy } from './types';
 import { ITEMS_PER_PAGE } from './constants';
-import { getLocalMihomoProxies, getMihomoStatus, updateLocalMihomoProxy } from './mihomo/api';
+import { getLocalMihomoProxies, updateLocalMihomoProxy } from './mihomo/api';
 import { MihomoConnectDialog } from './mihomo/mihomo-connect-dialog';
 import { MihomoPage } from './mihomo/mihomo-page';
 import type { MihomoLocalProxy } from './mihomo/types';
@@ -60,6 +60,7 @@ const ProxyCenterPage: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const mihomoRunning = useMihomoRuntimeStore((state) => state.running);
+  const mihomoAttached = useMihomoRuntimeStore((state) => state.attached);
 
   // 搜索和分页
   const {
@@ -124,7 +125,6 @@ const ProxyCenterPage: React.FC = () => {
   // 导出对话框状态
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [mihomoDialogOpen, setMihomoDialogOpen] = useState(false);
-  const [mihomoAttached, setMihomoAttached] = useState(false);
   const { clearSelection } = handlers.selection;
 
   const loadLocalProxies = useCallback(async () => {
@@ -188,33 +188,6 @@ const ProxyCenterPage: React.FC = () => {
   }, [location.search]);
 
   useEffect(() => {
-    let cancelled = false;
-
-    if (!mihomoRunning) {
-      setMihomoAttached(false);
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    void getMihomoStatus()
-      .then((status) => {
-        if (!cancelled) {
-          setMihomoAttached(status.attached);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setMihomoAttached(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [mihomoRunning]);
-
-  useEffect(() => {
     if (proxyMode !== 'local') {
       return;
     }
@@ -241,15 +214,15 @@ const ProxyCenterPage: React.FC = () => {
       return;
     }
 
-    try {
-      const status = await getMihomoStatus();
-      setMihomoAttached(status.attached);
-      if (status.attached) {
-        navigate('/proxy/mihomo');
-        return;
-      }
-    } catch {
-      // Fall through to connection dialog when runtime is up but session is unavailable.
+    await useMihomoRuntimeStore.getState().refresh();
+    const { running, attached } = useMihomoRuntimeStore.getState();
+    if (!running) {
+      return;
+    }
+
+    if (attached) {
+      navigate('/proxy/mihomo');
+      return;
     }
 
     setMihomoDialogOpen(true);
@@ -537,7 +510,7 @@ const ProxyCenterPage: React.FC = () => {
         open={mihomoDialogOpen}
         onOpenChange={setMihomoDialogOpen}
         onConnected={() => {
-          setMihomoAttached(true);
+          void useMihomoRuntimeStore.getState().refresh();
           navigate('/proxy/mihomo');
         }}
       />

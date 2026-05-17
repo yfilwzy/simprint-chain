@@ -9,19 +9,39 @@ import type {
   MatchMode,
   GeolocationPrompt,
   AdvancedFingerprintSettings,
+  ProxySourceMode,
 } from '../types';
 import { CreateWindowProxyDrawer } from './create-window-proxy-drawer';
 // @ts-ignore - Cross-plugin import
 import { listProxies, type ProxyItem } from '../../../environment-manager/src/api';
+// @ts-ignore - Cross-plugin import
+import {
+  getLocalMihomoProxyRecords,
+  type MihomoLocalProxyRecord,
+} from '../../../environment-manager/src/utils';
 
 interface NetworkLocationFormProps {
   basicSettings: BasicSettings;
   advancedSettings: AdvancedFingerprintSettings;
+  proxySourceMode: ProxySourceMode;
   proxyUuids: string[]; // 代理 UUID 列表
+  localProxyNodeNames: string[];
   createCount?: number; // 可选，仅在创建模式下使用，用于限制代理选择数量
   onBasicSettingsChange: (value: BasicSettings) => void;
   onAdvancedSettingsChange: (value: AdvancedFingerprintSettings) => void;
-  onProxyUuidsChange: (value: string[]) => void; // 更新代理 UUID 列表
+  onProxySelectionChange: (value: {
+    mode: ProxySourceMode;
+    remoteProxyUuids: string[];
+    localProxyNodeNames: string[];
+  }) => void;
+}
+
+interface ProxyDisplayItem {
+  key: string;
+  name: string;
+  host: string;
+  port: number;
+  source: ProxySourceMode;
 }
 
 // 分段控制器组件
@@ -58,25 +78,55 @@ function SegmentedControl<T extends string>({
 export function NetworkLocationForm({
   basicSettings,
   advancedSettings,
+  proxySourceMode,
   proxyUuids,
+  localProxyNodeNames,
   createCount,
   onBasicSettingsChange,
   onAdvancedSettingsChange,
-  onProxyUuidsChange,
+  onProxySelectionChange,
 }: NetworkLocationFormProps) {
   const { t } = useTranslation('create-window');
   const [proxyDrawerOpen, setProxyDrawerOpen] = useState(false);
   const [allProxies, setAllProxies] = useState<ProxyItem[]>([]);
+  const [localProxies, setLocalProxies] = useState<MihomoLocalProxyRecord[]>([]);
 
   // 获取选中的代理信息（用于显示）
-  const selectedProxies = useMemo(() => {
-    return allProxies.filter((p) => proxyUuids.includes(p.uuid));
-  }, [proxyUuids, allProxies]);
+  const selectedProxies = useMemo<ProxyDisplayItem[]>(() => {
+    if (proxySourceMode === 'local') {
+      const localProxyMap = new Map(localProxies.map((proxy) => [proxy.node_name, proxy]));
+      return localProxyNodeNames.map((nodeName) => {
+        const proxy = localProxyMap.get(nodeName);
+        return {
+          key: nodeName,
+          name: proxy?.name || nodeName,
+          host: proxy?.listen_host || '127.0.0.1',
+          port: proxy?.listen_port || 0,
+          source: 'local',
+        };
+      });
+    }
+
+    return allProxies
+      .filter((p) => proxyUuids.includes(p.uuid))
+      .map((proxy) => ({
+        key: proxy.uuid,
+        name: proxy.name,
+        host: proxy.host,
+        port: proxy.port,
+        source: 'remote',
+      }));
+  }, [proxySourceMode, proxyUuids, localProxyNodeNames, allProxies, localProxies]);
 
   // 加载代理列表（用于匹配）
   useEffect(() => {
     listProxies()
       .then(setAllProxies)
+      .catch(() => {
+        // 忽略错误
+      });
+    getLocalMihomoProxyRecords()
+      .then(setLocalProxies)
       .catch(() => {
         // 忽略错误
       });
@@ -125,9 +175,10 @@ export function NetworkLocationForm({
         {selectedProxies.length > 0 ? (
           <div className="space-y-1">
             {selectedProxies.map((proxy) => (
-              <div key={proxy.uuid} className="flex items-center gap-1">
+              <div key={proxy.key} className="flex items-center gap-1">
                 <div className="flex-1 h-8 px-2 flex items-center text-xs bg-muted rounded overflow-hidden">
                   <span className="truncate">
+                    {proxy.source === 'local' ? `${proxy.name} · ` : ''}
                     {proxy.host}:{proxy.port}
                   </span>
                 </div>
@@ -137,7 +188,22 @@ export function NetworkLocationForm({
                   size="icon"
                   className="h-8 w-8 shrink-0"
                   onClick={() => {
-                    onProxyUuidsChange(proxyUuids.filter((uuid) => uuid !== proxy.uuid));
+                    if (proxy.source === 'local') {
+                      onProxySelectionChange({
+                        mode: 'local',
+                        remoteProxyUuids: [],
+                        localProxyNodeNames: localProxyNodeNames.filter(
+                          (nodeName) => nodeName !== proxy.key
+                        ),
+                      });
+                      return;
+                    }
+
+                    onProxySelectionChange({
+                      mode: 'remote',
+                      remoteProxyUuids: proxyUuids.filter((uuid) => uuid !== proxy.key),
+                      localProxyNodeNames: [],
+                    });
                   }}
                 >
                   <X className="h-3.5 w-3.5" />
@@ -215,11 +281,17 @@ export function NetworkLocationForm({
       {/* 代理设置抽屉 */}
       <CreateWindowProxyDrawer
         open={proxyDrawerOpen}
+        selectedProxyMode={proxySourceMode}
         selectedProxyUuids={proxyUuids}
+        selectedLocalProxyNodeNames={localProxyNodeNames}
         maxCount={createCount} // 传递最大数量限制
         onOpenChange={setProxyDrawerOpen}
-        onConfirm={(newProxyUuids) => {
-          onProxyUuidsChange(newProxyUuids);
+        onConfirm={({ mode, remoteProxyUuids, localProxyNodeNames: nextLocalProxyNodeNames }) => {
+          onProxySelectionChange({
+            mode,
+            remoteProxyUuids,
+            localProxyNodeNames: nextLocalProxyNodeNames,
+          });
         }}
       />
     </div>

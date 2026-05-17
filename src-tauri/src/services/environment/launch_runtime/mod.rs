@@ -5,11 +5,13 @@ mod paths;
 mod types;
 
 use futures::future::try_join_all;
+use serde::Deserialize;
 use tauri::AppHandle;
 
 use crate::{
     app::handle::get_app_handle,
     core::error::Result,
+    infrastructure::{mihomo::MihomoLocalProxy, persistence::tauri_store},
     services::environment::{
         AccountInfo, BatchLaunchRequest, BatchLaunchResult, CookieGroup, ExtensionInfo,
         KernelService, KernelStatusEmitter, ProxyConfig,
@@ -25,6 +27,15 @@ use self::{
 };
 
 pub struct EnvironmentLaunchRuntimeService;
+
+const ENVIRONMENT_LOCAL_PROXY_BINDINGS_STORE_KEY: &str = "environment.local_proxy_bindings";
+const MIHOMO_LOCAL_PROXIES_STORE_KEY: &str = "mihomo.local_proxies";
+
+#[derive(Debug, Clone, Deserialize)]
+struct EnvironmentLocalProxyBinding {
+    env_uuid: String,
+    node_name: String,
+}
 
 impl EnvironmentLaunchRuntimeService {
     pub fn resolve_launch_paths(app: &AppHandle) -> Result<LaunchPaths> {
@@ -111,12 +122,66 @@ impl EnvironmentLaunchRuntimeService {
             cache_path: launch_paths.cache_path.clone(),
             cookies: normalize_cookies(detail.cookies),
             urls: normalize_urls(detail.urls),
-            proxy: build_tauri_proxy_config(detail.proxy),
+            proxy: resolve_environment_proxy_config(&app, &env.uuid, detail.proxy),
             fingerprint_config: Some(fingerprint_config),
             accounts: normalize_accounts(detail.accounts),
             extensions: normalize_extensions(detail.extensions),
         })
     }
+}
+
+fn resolve_environment_proxy_config(
+    app: &AppHandle,
+    env_uuid: &str,
+    remote_proxy: Option<EnvironmentProxyLike>,
+) -> Option<ProxyConfig> {
+    match resolve_local_proxy_config(app, env_uuid) {
+        LocalProxyResolution::Resolved(proxy) => Some(proxy),
+        LocalProxyResolution::MissingBindingTarget => None,
+        LocalProxyResolution::NoBinding => build_tauri_proxy_config(remote_proxy),
+    }
+}
+
+fn resolve_local_proxy_config(app: &AppHandle, env_uuid: &str) -> LocalProxyResolution {
+    let bindings = tauri_store::get_store_key(app, ENVIRONMENT_LOCAL_PROXY_BINDINGS_STORE_KEY)
+        .and_then(|value| serde_json::from_value::<std::collections::HashMap<String, EnvironmentLocalProxyBinding>>(value).ok())
+        .unwrap_or_default();
+
+    let Some(binding) = bindings.get(env_uuid) else {
+        return LocalProxyResolution::NoBinding;
+    };
+
+    let proxies = tauri_store::get_store_key(app, MIHOMO_LOCAL_PROXIES_STORE_KEY)
+        .and_then(|value| serde_json::from_value::<Vec<MihomoLocalProxy>>(value).ok())
+        .unwrap_or_default();
+
+    let Some(proxy) = proxies.into_iter().find(|proxy| proxy.node_name == binding.node_name) else {
+        log::warn!(
+            "local proxy binding target missing for env_uuid={} node_name={}",
+            binding.env_uuid,
+            binding.node_name
+        );
+        return LocalProxyResolution::MissingBindingTarget;
+    };
+
+    let host = proxy.listen_host.trim().to_string();
+    if host.is_empty() || proxy.listen_port == 0 {
+        return LocalProxyResolution::MissingBindingTarget;
+    }
+
+    LocalProxyResolution::Resolved(ProxyConfig {
+        host,
+        port: proxy.listen_port,
+        proxy_type: proxy.proxy_scheme,
+        username: None,
+        password: None,
+    })
+}
+
+enum LocalProxyResolution {
+    NoBinding,
+    MissingBindingTarget,
+    Resolved(ProxyConfig),
 }
 
 fn build_tauri_proxy_config(proxy: Option<EnvironmentProxyLike>) -> Option<ProxyConfig> {

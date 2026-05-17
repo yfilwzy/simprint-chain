@@ -12,13 +12,20 @@ import {
 } from '../api';
 import {
   updateEnvironment,
+  setEnvironmentProxy,
+  listProxies,
   listAccounts,
   type ProxyItem,
   type AccountItem,
 } from '../../../environment-manager/src/api';
 import type { GroupItem, TagItem } from '../../../environment-manager/src/api';
 // @ts-ignore - Cross-plugin import
-import { useSettingsDialogStore, useRefreshStore } from '../../../../services/store/src';
+import {
+  removeEnvironmentLocalProxyBinding,
+  setEnvironmentLocalProxyBinding,
+  useSettingsDialogStore,
+  useRefreshStore,
+} from '../../../../services/store/src';
 import { useAuthStore } from '../../../../services/store/src/stores/auth';
 
 export interface CreateWindowOptions {
@@ -66,6 +73,12 @@ export function useCreateWindow(
   const [selectedGroupUuid, setSelectedGroupUuid] = useState<string | undefined>(initialGroupUuid);
   const [selectedTagUuids, setSelectedTagUuids] = useState<string[]>(initialTagUuids || []);
   const { refreshWorkspaces } = useRefreshStore();
+
+  const isLocalProxyMode = windowConfig.windowInfo.proxySourceMode === 'local';
+  const selectedRemoteProxyUuids = isLocalProxyMode ? [] : windowConfig.windowInfo.proxyUuids;
+  const selectedLocalProxyNodeNames = isLocalProxyMode
+    ? windowConfig.windowInfo.localProxyNodeNames
+    : [];
 
   // 当初始配置变化时更新窗口配置
   useEffect(() => {
@@ -133,8 +146,8 @@ export function useCreateWindow(
           if (selectedTagUuids.length > 0 && fullData.tags) {
             tags = fullData.tags.filter((t) => selectedTagUuids.includes(t.uuid));
           }
-          if (windowConfig.windowInfo.proxyUuids.length > 0 && fullData.proxies) {
-            proxy = fullData.proxies.find((p) => p.uuid === windowConfig.windowInfo.proxyUuids[0]);
+          if (selectedRemoteProxyUuids.length > 0 && fullData.proxies) {
+            proxy = fullData.proxies.find((p) => p.uuid === selectedRemoteProxyUuids[0]);
           }
           if (windowConfig.windowInfo.accountUuids.length > 0 && fullData.accounts) {
             accounts = fullData.accounts.filter((a) =>
@@ -144,11 +157,11 @@ export function useCreateWindow(
         } else {
           // 如果没有传入完整数据，则从 API 获取
           const [proxiesList, accountsList] = await Promise.all([
-            windowConfig.windowInfo.proxyUuids.length > 0 ? listProxies() : Promise.resolve([]),
+            selectedRemoteProxyUuids.length > 0 ? listProxies() : Promise.resolve([]),
             windowConfig.windowInfo.accountUuids.length > 0 ? listAccounts() : Promise.resolve([]),
           ]);
-          if (windowConfig.windowInfo.proxyUuids.length > 0) {
-            proxy = proxiesList.find((p) => p.uuid === windowConfig.windowInfo.proxyUuids[0]);
+          if (selectedRemoteProxyUuids.length > 0) {
+            proxy = proxiesList.find((p) => p.uuid === selectedRemoteProxyUuids[0]);
           }
           if (windowConfig.windowInfo.accountUuids.length > 0) {
             accounts = accountsList.filter((a) =>
@@ -225,6 +238,7 @@ export function useCreateWindow(
       windowConfig,
       selectedGroupUuid,
       selectedTagUuids,
+      selectedRemoteProxyUuids,
       t,
       navigate,
       openSettingsDialog,
@@ -259,8 +273,8 @@ export function useCreateWindow(
           if (selectedTagUuids.length > 0 && fullData.tags) {
             tags = fullData.tags.filter((t) => selectedTagUuids.includes(t.uuid));
           }
-          if (windowConfig.windowInfo.proxyUuids.length > 0 && fullData.proxies) {
-            proxy = fullData.proxies.find((p) => p.uuid === windowConfig.windowInfo.proxyUuids[0]);
+          if (selectedRemoteProxyUuids.length > 0 && fullData.proxies) {
+            proxy = fullData.proxies.find((p) => p.uuid === selectedRemoteProxyUuids[0]);
           }
           if (windowConfig.windowInfo.accountUuids.length > 0 && fullData.accounts) {
             accounts = fullData.accounts.filter((a) =>
@@ -270,11 +284,11 @@ export function useCreateWindow(
         } else {
           // 如果没有传入完整数据，则从 API 获取
           const [proxiesList, accountsList] = await Promise.all([
-            windowConfig.windowInfo.proxyUuids.length > 0 ? listProxies() : Promise.resolve([]),
+            selectedRemoteProxyUuids.length > 0 ? listProxies() : Promise.resolve([]),
             windowConfig.windowInfo.accountUuids.length > 0 ? listAccounts() : Promise.resolve([]),
           ]);
-          if (windowConfig.windowInfo.proxyUuids.length > 0) {
-            proxy = proxiesList.find((p) => p.uuid === windowConfig.windowInfo.proxyUuids[0]);
+          if (selectedRemoteProxyUuids.length > 0) {
+            proxy = proxiesList.find((p) => p.uuid === selectedRemoteProxyUuids[0]);
           }
           if (windowConfig.windowInfo.accountUuids.length > 0) {
             accounts = accountsList.filter((a) =>
@@ -359,6 +373,7 @@ export function useCreateWindow(
       windowConfig,
       selectedGroupUuid,
       selectedTagUuids,
+      selectedRemoteProxyUuids,
       t,
       openSettingsDialog,
     ]
@@ -372,9 +387,9 @@ export function useCreateWindow(
     try {
       // 编辑模式：更新环境
       if (editUuid) {
-        const proxyUuid = windowConfig.windowInfo.proxyUuids.length > 0
-          ? windowConfig.windowInfo.proxyUuids[0]
-          : undefined;
+        const proxyUuid = selectedRemoteProxyUuids.length > 0 ? selectedRemoteProxyUuids[0] : undefined;
+        const localProxyNodeName =
+          selectedLocalProxyNodeNames.length > 0 ? selectedLocalProxyNodeNames[0] : undefined;
 
         const request = transformWindowConfigToRequest(windowConfig, {
           groupUuid: selectedGroupUuid,
@@ -394,6 +409,16 @@ export function useCreateWindow(
           urls: request.urls,
           config: request.config,
         });
+        if (isLocalProxyMode) {
+          if (localProxyNodeName) {
+            await setEnvironmentLocalProxyBinding(editUuid, localProxyNodeName);
+          } else {
+            await removeEnvironmentLocalProxyBinding(editUuid);
+          }
+        } else {
+          await removeEnvironmentLocalProxyBinding(editUuid);
+          await setEnvironmentProxy({ uuid: editUuid, proxy_uuid: proxyUuid });
+        }
         toast.success(t('actions.updateSuccess') || '窗口更新成功');
         // 更新环境后刷新工作空间相关数据（包括配额）
         refreshWorkspaces();
@@ -411,16 +436,29 @@ export function useCreateWindow(
             : `窗口_${index + 1}`,
           // 批量创建时，其他数据相同，但代理需要按顺序分配
           proxyUuids: [], // 代理将在 API 调用时单独处理
+          localProxyNodeNames: [], // 本地代理将在创建后单独处理
         },
       }));
 
       // 获取代理 UUID 列表（用于按顺序分配）
-      const proxyUuids = windowConfig.windowInfo.proxyUuids || [];
+      const proxyUuids = selectedRemoteProxyUuids;
+      const localProxyNodeNames = selectedLocalProxyNodeNames;
 
       const results = await batchCreateEnvironments(configs, proxyUuids, {
         groupUuid: selectedGroupUuid,
         tagUuids: selectedTagUuids.length > 0 ? selectedTagUuids : undefined,
       });
+      if (isLocalProxyMode && localProxyNodeNames.length > 0) {
+        await Promise.all(
+          results.map((result, index) => {
+            const nodeName = localProxyNodeNames[index];
+            if (!nodeName) {
+              return Promise.resolve();
+            }
+            return setEnvironmentLocalProxyBinding(result.uuid, nodeName);
+          })
+        );
+      }
       toast.success(
         (t('actions.batchCreateSuccess') || '成功创建 {count} 个窗口').replace(
           '{count}',
@@ -450,6 +488,9 @@ export function useCreateWindow(
     t,
     navigate,
     refreshWorkspaces,
+    isLocalProxyMode,
+    selectedRemoteProxyUuids,
+    selectedLocalProxyNodeNames,
   ]);
 
   return {

@@ -81,7 +81,7 @@ export function ProxyHeader({
 
   return (
     <>
-      <header className="border-b border-border flex items-center justify-between px-6 py-2 bg-background/10 backdrop-blur-2xl">
+      <header className="border-b border-border flex items-center justify-between px-4 py-2 bg-background/10 backdrop-blur-2xl">
       <div className="flex items-center gap-4">
         <div className="flex items-center gap-2 rounded-xl bg-secondary p-1">
           <button
