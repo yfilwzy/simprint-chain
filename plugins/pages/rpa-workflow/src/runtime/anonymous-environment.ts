@@ -1,6 +1,7 @@
 ﻿import { invoke } from '@/lib/tauri';
 import {
   type BrowserKernelVersion,
+  type ProxyConfig,
   listBrowserKernels,
   SIMPRINT_KERNEL_CHROMIUM,
 } from '../../../../services/environment/src';
@@ -66,7 +67,9 @@ async function waitForEndpoint(envUuid: string, timeoutMs = 15000): Promise<CdpE
   throw new Error('Temporary RPA environment started, but CDP endpoint was not ready in time.');
 }
 
-export async function startAnonymousRpaEnvironment(): Promise<CdpEndpoint> {
+export async function startAnonymousRpaEnvironment(
+  proxy?: ProxyConfig | null
+): Promise<CdpEndpoint> {
   const [storage, defaultPaths] = await Promise.all([
     getStorageSettings(),
     invoke<DefaultStoragePaths>('get_storage_default_paths'),
@@ -111,7 +114,7 @@ export async function startAnonymousRpaEnvironment(): Promise<CdpEndpoint> {
     exePath,
     envUuid: anonymousEnvUuid,
     cachePath: effectiveCache,
-    proxy: undefined,
+    proxy: proxy ?? undefined,
     fingerprintConfig,
     accounts: undefined,
     extensions: undefined,
@@ -123,4 +126,3 @@ export async function startAnonymousRpaEnvironment(): Promise<CdpEndpoint> {
 export async function stopAnonymousRpaEnvironment(envUuid: string): Promise<void> {
   await invoke('stop_environment', { envUuid });
 }
-

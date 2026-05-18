@@ -360,7 +360,6 @@ export class CdpBrowserAdapter implements BrowserAdapter {
       void this.client
         .send('Target.detachFromTarget', { sessionId: target.sessionId })
         .catch(() => undefined);
-      void this.client.send('Target.closeTarget', { targetId: target.targetId }).catch(() => undefined);
     }
 
     this.client.close();

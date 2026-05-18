@@ -8,6 +8,7 @@ import {
   Save,
   Play,
   Square,
+  Shield,
   Settings,
   Settings2,
 } from 'lucide-react';
@@ -15,6 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { FormattedDialog, FormattedDialogFooter } from '@/components/formatted-dialog';
+import { cn } from '@/lib/utils';
 import { createRpaTask, getRpaTaskDetail, updateRpaTask } from '../../api';
 import {
   startAnonymousRpaEnvironment,
@@ -41,8 +43,13 @@ import { getLoopAutoDimensions, getLoopAutoPosition } from './loop-layout';
 import { PropertyPanel } from './property-panel';
 import { TaskSettingsForm, type TaskConfig, type TaskVariable } from './task-settings-form';
 import { VariablePanel, type RuntimeVariableItem } from './variable-panel';
+import {
+  AnonymousProxyDrawer,
+  type AnonymousProxyCandidate,
+} from './anonymous-proxy-drawer';
 import { buildTaskPayload, buildWorkflowSchema, mapPortableTaskToEditorState, mapTaskDetailToEditorState } from './workflow-mapper';
 import type { PortableRpaTaskDocument } from '../../lib/rpa-transfer';
+import type { ProxyConfig } from '../../../../services/environment/src';
 
 function createDefaultTaskConfig(): TaskConfig {
   const now = new Date();
@@ -87,6 +94,40 @@ interface RunStepItem {
   error?: string;
 }
 
+function buildAnonymousProxyConfig(
+  proxy: AnonymousProxyCandidate | null
+): ProxyConfig | null {
+  if (!proxy?.host || !proxy.port) {
+    return null;
+  }
+
+  return {
+    host: proxy.host,
+    port: proxy.port,
+    proxy_type: proxy.proxy_type || 'http',
+    username: proxy.username || undefined,
+    password: proxy.password
+      ? {
+          value: proxy.password,
+          encrypted: false,
+        }
+      : undefined,
+  };
+}
+
+function getAnonymousProxyLabel(
+  proxy: AnonymousProxyCandidate | null,
+  t: ReturnType<typeof useTranslation>['t']
+): string {
+  if (!proxy) {
+    return t('editor.proxy.none', { defaultValue: '未配置代理' });
+  }
+
+  return proxy.source === 'local'
+    ? proxy.name
+    : `${proxy.host}:${proxy.port}`;
+}
+
 export function TaskEditor() {
   const { t } = useTranslation('rpa');
   const navigate = useNavigate();
@@ -108,6 +149,9 @@ export function TaskEditor() {
   const [runStepItems, setRunStepItems] = useState<RunStepItem[]>([]);
   const [activeRunEnvUuid, setActiveRunEnvUuid] = useState<string | null>(null);
   const [activeRunEnvStatus, setActiveRunEnvStatus] = useState<EnvironmentStatus | undefined>(undefined);
+  const [proxyDrawerOpen, setProxyDrawerOpen] = useState(false);
+  const [selectedAnonymousProxy, setSelectedAnonymousProxy] =
+    useState<AnonymousProxyCandidate | null>(null);
   const stopRequestedRef = useRef(false);
 
   const selectedStep = steps.find((s) => s.id === selectedStepId) || null;
@@ -183,6 +227,16 @@ export function TaskEditor() {
     Boolean(activeRunEnvUuid) &&
     activeRunEnvStatus !== 'stopped';
   const runButtonBusy = running || hasActiveRunEnvironment || runStatus === 'stopping';
+  const proxyButtonDisabled =
+    runStatus === 'starting' || runStatus === 'running' || runStatus === 'stopping';
+  const anonymousProxyLabel = useMemo(
+    () => getAnonymousProxyLabel(selectedAnonymousProxy, t),
+    [selectedAnonymousProxy, t]
+  );
+  const anonymousProxyConfig = useMemo(
+    () => buildAnonymousProxyConfig(selectedAnonymousProxy),
+    [selectedAnonymousProxy]
+  );
   const normalizeRunError = useCallback(
     (error?: string) => {
       if (!error) {
@@ -672,7 +726,7 @@ export function TaskEditor() {
     stopRequestedRef.current = false;
 
     try {
-      const endpoint = await startAnonymousRpaEnvironment();
+      const endpoint = await startAnonymousRpaEnvironment(anonymousProxyConfig);
       setActiveRunEnvUuid(endpoint.env_uuid);
 
       const runner = new RpaRunner(new CdpBrowserAdapter());
@@ -766,18 +820,39 @@ export function TaskEditor() {
             <Settings className="h-3.5 w-3.5" />
             {t('editor.settings')}
           </button>
-          <button
-            onClick={runButtonBusy ? handleStopRunningEnvironment : handleRun}
-            disabled={runStatus === 'stopping'}
-            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 border border-border rounded hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {runButtonBusy ? (
-              <Square className="h-3.5 w-3.5" />
-            ) : (
-              <Play className="h-3.5 w-3.5" />
-            )}
-            {runButtonBusy ? t('table.actions.stop') : t('editor.run')}
-          </button>
+          <div className="inline-flex overflow-hidden rounded border border-border">
+            <button
+              onClick={runButtonBusy ? handleStopRunningEnvironment : handleRun}
+              disabled={runStatus === 'stopping'}
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {runButtonBusy ? (
+                <Square className="h-3.5 w-3.5" />
+              ) : (
+                <Play className="h-3.5 w-3.5" />
+              )}
+              {runButtonBusy ? t('table.actions.stop') : t('editor.run')}
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setProxyDrawerOpen(true);
+              }}
+              disabled={proxyButtonDisabled}
+              title={anonymousProxyLabel}
+              aria-label={t('editor.proxy.openDrawer', { defaultValue: '配置匿名环境代理' })}
+              className={cn(
+                'relative flex items-center justify-center px-2.5 py-2 border-l border-border hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                selectedAnonymousProxy ? 'text-primary' : 'text-muted-foreground'
+              )}
+            >
+              <Shield className="h-3.5 w-3.5" />
+              {selectedAnonymousProxy ? (
+                <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-primary" />
+              ) : null}
+            </button>
+          </div>
           <button
             onClick={handleSave}
             disabled={saving}
@@ -788,6 +863,13 @@ export function TaskEditor() {
           </button>
         </div>
       </div>
+
+      <AnonymousProxyDrawer
+        open={proxyDrawerOpen}
+        value={selectedAnonymousProxy}
+        onOpenChange={setProxyDrawerOpen}
+        onChange={setSelectedAnonymousProxy}
+      />
 
       <div className="flex-1 flex min-h-0">
         <ComponentPanel
