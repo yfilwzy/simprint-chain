@@ -114,6 +114,53 @@ interface RunStepItem {
   incomingBranchKey?: 'true' | 'false';
 }
 
+interface EditorHistorySnapshot {
+  steps: FlowStep[];
+  specialPositions: SpecialNodePositions;
+  selectedStepId: string | null;
+}
+
+interface EditorHistoryState {
+  past: EditorHistorySnapshot[];
+  future: EditorHistorySnapshot[];
+}
+
+const MAX_EDITOR_HISTORY = 100;
+
+function cloneHistorySnapshot(snapshot: EditorHistorySnapshot): EditorHistorySnapshot {
+  return JSON.parse(JSON.stringify(snapshot)) as EditorHistorySnapshot;
+}
+
+function normalizeHistorySnapshot(snapshot: EditorHistorySnapshot): EditorHistorySnapshot {
+  const selectedStepId =
+    snapshot.selectedStepId && snapshot.steps.some((step) => step.id === snapshot.selectedStepId)
+      ? snapshot.selectedStepId
+      : null;
+
+  return {
+    steps: snapshot.steps,
+    specialPositions: snapshot.specialPositions,
+    selectedStepId,
+  };
+}
+
+function areHistorySnapshotsEqual(a: EditorHistorySnapshot, b: EditorHistorySnapshot): boolean {
+  return JSON.stringify(normalizeHistorySnapshot(a)) === JSON.stringify(normalizeHistorySnapshot(b));
+}
+
+function isEditableUndoTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  if (target.isContentEditable) {
+    return true;
+  }
+
+  const tagName = target.tagName.toLowerCase();
+  return tagName === 'input' || tagName === 'textarea' || tagName === 'select';
+}
+
 function buildAnonymousProxyConfig(
   proxy: AnonymousProxyCandidate | null
 ): ProxyConfig | null {
@@ -176,6 +223,15 @@ export function TaskEditor() {
   const [selectedAnonymousProxy, setSelectedAnonymousProxy] =
     useState<AnonymousProxyCandidate | null>(null);
   const stopRequestedRef = useRef(false);
+  const editorSnapshotRef = useRef<EditorHistorySnapshot>({
+    steps: [],
+    specialPositions: DEFAULT_SPECIAL_NODE_POSITIONS,
+    selectedStepId: null,
+  });
+  const [editorHistory, setEditorHistory] = useState<EditorHistoryState>({
+    past: [],
+    future: [],
+  });
 
   const selectedStep = steps.find((s) => s.id === selectedStepId) || null;
   const stepStatusMap = useMemo(
@@ -286,6 +342,75 @@ export function TaskEditor() {
     () => buildAnonymousProxyConfig(selectedAnonymousProxy),
     [selectedAnonymousProxy]
   );
+  const canUndo = editorHistory.past.length > 0 && !runButtonBusy;
+
+  useEffect(() => {
+    editorSnapshotRef.current = {
+      steps,
+      specialPositions,
+      selectedStepId,
+    };
+  }, [steps, specialPositions, selectedStepId]);
+
+  const applyEditorSnapshot = useCallback((snapshot: EditorHistorySnapshot) => {
+    const normalizedSnapshot = normalizeHistorySnapshot(cloneHistorySnapshot(snapshot));
+    setSteps(normalizedSnapshot.steps);
+    setSpecialPositions(normalizedSnapshot.specialPositions);
+    setSelectedStepId(normalizedSnapshot.selectedStepId);
+    setSelectedComponent(null);
+  }, []);
+
+  const commitEditorChange = useCallback(
+    (updater: (current: EditorHistorySnapshot) => EditorHistorySnapshot | null) => {
+      const currentSnapshot = normalizeHistorySnapshot(
+        cloneHistorySnapshot(editorSnapshotRef.current)
+      );
+      const nextSnapshot = updater(currentSnapshot);
+      if (!nextSnapshot) {
+        return;
+      }
+
+      const normalizedNextSnapshot = normalizeHistorySnapshot(
+        cloneHistorySnapshot(nextSnapshot)
+      );
+      if (areHistorySnapshotsEqual(currentSnapshot, normalizedNextSnapshot)) {
+        return;
+      }
+
+      setEditorHistory((prev) => ({
+        past: [...prev.past.slice(-(MAX_EDITOR_HISTORY - 1)), currentSnapshot],
+        future: [],
+      }));
+      applyEditorSnapshot(normalizedNextSnapshot);
+    },
+    [applyEditorSnapshot]
+  );
+
+  const resetEditorHistory = useCallback((snapshot: EditorHistorySnapshot) => {
+    setEditorHistory({ past: [], future: [] });
+    applyEditorSnapshot(snapshot);
+  }, [applyEditorSnapshot]);
+
+  const handleUndo = useCallback(() => {
+    if (!canUndo) {
+      return;
+    }
+
+    const previousSnapshot = editorHistory.past[editorHistory.past.length - 1];
+    if (!previousSnapshot) {
+      return;
+    }
+
+    const currentSnapshot = normalizeHistorySnapshot(
+      cloneHistorySnapshot(editorSnapshotRef.current)
+    );
+
+    applyEditorSnapshot(previousSnapshot);
+    setEditorHistory((prev) => ({
+      past: prev.past.slice(0, -1),
+      future: [currentSnapshot, ...prev.future].slice(0, MAX_EDITOR_HISTORY),
+    }));
+  }, [applyEditorSnapshot, canUndo, editorHistory]);
   const normalizeRunError = useCallback(
     (error?: string) => {
       if (!error) {
@@ -392,8 +517,11 @@ export function TaskEditor() {
 
         const editorState = mapTaskDetailToEditorState(detail);
         setConfig(editorState.config);
-        setSteps(editorState.steps);
-        setSpecialPositions(editorState.specialPositions);
+        resetEditorHistory({
+          steps: editorState.steps,
+          specialPositions: editorState.specialPositions,
+          selectedStepId: null,
+        });
       } catch (e) {
         if (!cancelled) {
           toast.error(e instanceof Error ? e.message : 'Failed to load task.');
@@ -411,7 +539,7 @@ export function TaskEditor() {
     return () => {
       cancelled = true;
     };
-  }, [id, navigate]);
+  }, [id, navigate, resetEditorHistory]);
 
   useEffect(() => {
     if (isEditing) {
@@ -438,11 +566,13 @@ export function TaskEditor() {
 
     const editorState = mapPortableTaskToEditorState(importedDocument);
     setConfig(editorState.config);
-    setSteps(editorState.steps);
-    setSpecialPositions(editorState.specialPositions);
-    setSelectedStepId(null);
+    resetEditorHistory({
+      steps: editorState.steps,
+      specialPositions: editorState.specialPositions,
+      selectedStepId: null,
+    });
     setSelectedComponent(null);
-  }, [importedDocument, isEditing]);
+  }, [importedDocument, isEditing, resetEditorHistory]);
 
   useEffect(() => {
     if (!activeRunEnvUuid) {
@@ -531,21 +661,8 @@ export function TaskEditor() {
       }
 
       const newStepId = crypto.randomUUID();
-      let shouldAttachToSource = false;
-      let branchKey: 'true' | 'false' | null = null;
-
-      if (sourceId === 'start') {
-        shouldAttachToSource = !steps.some((step) => step.isStart);
-      } else if (sourceId) {
-        const sourceStep = steps.find((step) => step.id === sourceId);
-        if (sourceStep?.type === 'condition') {
-          branchKey = sourceHandle === 'branch-false' ? 'false' : 'true';
-          const branches = (sourceStep.config.branches as Record<string, unknown> | undefined) ?? {};
-          shouldAttachToSource = typeof branches[branchKey] !== 'string';
-        } else {
-          shouldAttachToSource = Boolean(sourceStep && !sourceStep.nextStepId);
-        }
-      }
+      const branchKey: 'true' | 'false' | null =
+        sourceId && sourceHandle ? (sourceHandle === 'branch-false' ? 'false' : 'true') : null;
 
       const newStep: FlowStep = {
         id: newStepId,
@@ -587,31 +704,48 @@ export function TaskEditor() {
                                 }
                         : {},
         enabled: true,
-        isStart: sourceId === 'start' && shouldAttachToSource,
+        isStart: false,
         nextStepId: null,
         position,
         parentLoopId: component.type === 'loop' ? null : parentLoopId ?? null,
       };
 
-      setSteps((prev) => {
+      commitEditorChange((current) => {
+        let shouldAttachToSource = false;
+        if (sourceId === 'start') {
+          shouldAttachToSource = !current.steps.some((step) => step.isStart);
+        } else if (sourceId) {
+          const sourceStep = current.steps.find((step) => step.id === sourceId);
+          if (sourceStep?.type === 'condition' && branchKey) {
+            const branches = (sourceStep.config.branches as Record<string, unknown> | undefined) ?? {};
+            shouldAttachToSource = typeof branches[branchKey] !== 'string';
+          } else {
+            shouldAttachToSource = Boolean(sourceStep && !sourceStep.nextStepId);
+          }
+        }
+
         const parentLoop =
           component.type !== 'loop' && parentLoopId
-            ? prev.find((step) => step.id === parentLoopId && step.type === 'loop') ?? null
+            ? current.steps.find((step) => step.id === parentLoopId && step.type === 'loop') ?? null
             : null;
         const existingLoopChildren = parentLoop
-          ? prev.filter((step) => step.parentLoopId === parentLoop.id && step.id !== newStepId).length
+          ? current.steps.filter((step) => step.parentLoopId === parentLoop.id && step.id !== newStepId).length
           : 0;
         const shouldUseAutoLayout = parentLoop && component.type !== 'loop' && !sourceId;
         const loopAwareStep =
           parentLoop && component.type !== 'loop'
             ? {
                 ...newStep,
+                isStart: sourceId === 'start' && shouldAttachToSource,
                 position: shouldUseAutoLayout ? getLoopAutoPosition(parentLoop, existingLoopChildren) : position,
                 parentLoopId: parentLoop.id,
               }
-            : newStep;
+            : {
+                ...newStep,
+                isStart: sourceId === 'start' && shouldAttachToSource,
+              };
 
-        const nextSteps = prev.map((step) => {
+        const nextSteps = current.steps.map((step) => {
           if (sourceId === 'start') {
             if (shouldAttachToSource) {
               return { ...step, isStart: false };
@@ -652,17 +786,24 @@ export function TaskEditor() {
           return step;
         });
 
-        return [...nextSteps, loopAwareStep];
+        return {
+          ...current,
+          steps: [...nextSteps, loopAwareStep],
+          selectedStepId: newStep.id,
+        };
       });
-      setSelectedStepId(newStep.id);
       setSelectedComponent(null);
     },
-    [steps]
+    [commitEditorChange, t]
   );
 
   const handleUpdateStep = useCallback((updatedStep: FlowStep) => {
-    setSteps((prev) => prev.map((s) => (s.id === updatedStep.id ? updatedStep : s)));
-  }, []);
+    commitEditorChange((current) => ({
+      ...current,
+      steps: current.steps.map((step) => (step.id === updatedStep.id ? updatedStep : step)),
+      selectedStepId: updatedStep.id,
+    }));
+  }, [commitEditorChange]);
 
   const handleGlobalVariablesChange = useCallback((variables: TaskVariable[]) => {
     setConfig((prev) => ({ ...prev, globalVariables: variables }));
@@ -670,12 +811,12 @@ export function TaskEditor() {
 
   const handleDeleteStep = useCallback(
     (stepId: string) => {
-      setSteps((prev) => {
-        const deletedStep = prev.find((step) => step.id === stepId);
+      commitEditorChange((current) => {
+        const deletedStep = current.steps.find((step) => step.id === stepId);
         const fallbackStartId = deletedStep?.isStart ? deletedStep.nextStepId ?? null : null;
         const deletedLoopPosition = deletedStep?.type === 'loop' ? deletedStep.position ?? { x: 0, y: 0 } : null;
         const deletedStepIds = new Set(
-          prev
+          current.steps
             .filter(
               (step) =>
                 step.id === stepId ||
@@ -686,7 +827,7 @@ export function TaskEditor() {
             .map((step) => step.id)
         );
 
-        return prev
+        const nextSteps = current.steps
           .filter((step) => !deletedStepIds.has(step.id))
           .map((step) => {
             const nextStepId =
@@ -722,17 +863,34 @@ export function TaskEditor() {
                   : step.config,
             };
           });
+
+        return {
+          ...current,
+          steps: nextSteps,
+          selectedStepId: current.selectedStepId === stepId ? null : current.selectedStepId,
+        };
       });
-      if (selectedStepId === stepId) {
-        setSelectedStepId(null);
-      }
     },
-    [selectedStepId]
+    [commitEditorChange]
   );
 
   const handleUpdateSteps = useCallback((newSteps: FlowStep[]) => {
-    setSteps(newSteps);
-  }, []);
+    commitEditorChange((current) => ({
+      ...current,
+      steps: newSteps,
+      selectedStepId:
+        current.selectedStepId && newSteps.some((step) => step.id === current.selectedStepId)
+          ? current.selectedStepId
+          : null,
+    }));
+  }, [commitEditorChange]);
+
+  const handleSpecialPositionsChange = useCallback((positions: SpecialNodePositions) => {
+    commitEditorChange((current) => ({
+      ...current,
+      specialPositions: positions,
+    }));
+  }, [commitEditorChange]);
 
   const handleSave = async () => {
     if (!config.name.trim()) {
@@ -953,13 +1111,35 @@ export function TaskEditor() {
       return;
     }
 
-    setSteps([]);
-    setSpecialPositions(DEFAULT_SPECIAL_NODE_POSITIONS);
-    setSelectedStepId(null);
+    commitEditorChange(() => ({
+      steps: [],
+      specialPositions: DEFAULT_SPECIAL_NODE_POSITIONS,
+      selectedStepId: null,
+    }));
     setSelectedComponent(null);
     setRunStepItems([]);
     setRunStatus('idle');
   };
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.key.toLowerCase() !== 'z') {
+        return;
+      }
+
+      if (isEditableUndoTarget(event.target) || !canUndo) {
+        return;
+      }
+
+      event.preventDefault();
+      handleUndo();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [canUndo, handleUndo]);
 
   return (
     <div className="flex flex-col h-[calc(100vh-50px)] relative">
@@ -1046,9 +1226,11 @@ export function TaskEditor() {
           onSelectStep={setSelectedStepId}
           onDeleteStep={handleDeleteStep}
           onUpdateSteps={handleUpdateSteps}
-          onSpecialPositionsChange={setSpecialPositions}
+          onSpecialPositionsChange={handleSpecialPositionsChange}
           onDropComponent={handleAddComponent}
+          onUndo={handleUndo}
           onClearSteps={handleClearSteps}
+          undoDisabled={!canUndo}
           clearStepsDisabled={runButtonBusy || steps.length === 0}
           draggingComponent={selectedComponent}
           runStatus={runStatus}

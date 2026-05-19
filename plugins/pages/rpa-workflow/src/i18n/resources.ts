@@ -387,6 +387,7 @@ export const rpaResources = {
       menu: {
         exportJson: '导出为 JSON',
         importJson: '从 JSON 导入',
+        undo: '撤销',
         clearSteps: '清空所有步骤',
       },
     },
@@ -781,6 +782,7 @@ export const rpaResources = {
       menu: {
         exportJson: 'Export as JSON',
         importJson: 'Import from JSON',
+        undo: 'Undo',
         clearSteps: 'Clear All Steps',
       },
     },

@@ -14,7 +14,7 @@ import {
   ReactFlowProvider,
   useReactFlow,
 } from '@xyflow/react';
-import { Trash2 } from 'lucide-react';
+import { Trash2, Undo2 } from 'lucide-react';
 import type {
   Node,
   Edge,
@@ -82,7 +82,9 @@ interface FlowCanvasProps {
     parentLoopId?: string | null
   ) => void;
   onClearSteps?: () => void;
+  onUndo?: () => void;
   clearStepsDisabled?: boolean;
+  undoDisabled?: boolean;
   draggingComponent: ComponentItem | null;
   runStatus?: 'idle' | 'starting' | 'running' | 'success' | 'failed' | 'stopping' | 'stopped';
   stepStatuses?: Record<string, RpaRunnerStepStatus>;
@@ -582,7 +584,9 @@ function FlowCanvasInner({
   onSpecialPositionsChange,
   onDropComponent,
   onClearSteps,
+  onUndo,
   clearStepsDisabled = false,
+  undoDisabled = true,
   draggingComponent,
   runStatus = 'idle',
   stepStatuses = {},
@@ -989,16 +993,28 @@ const styledEdges = useMemo(
             className="bg-background! border-border! shadow-md! [&>button]:bg-background! [&>button]:border-border! [&>button]:text-muted-foreground! [&>button:hover]:bg-accent!"
           />
           <Panel position="top-right" className="mt-2 mr-2">
-            <button
-              type="button"
-              onClick={onClearSteps}
-              disabled={clearStepsDisabled}
-              className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background text-muted-foreground shadow-md transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-              aria-label={t('editor.menu.clearSteps')}
-              title={t('editor.menu.clearSteps')}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onUndo}
+                disabled={undoDisabled}
+                className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background text-muted-foreground shadow-md transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label={t('editor.menu.undo', { defaultValue: '撤销' })}
+                title={t('editor.menu.undo', { defaultValue: '撤销' })}
+              >
+                <Undo2 className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={onClearSteps}
+                disabled={clearStepsDisabled}
+                className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background text-muted-foreground shadow-md transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label={t('editor.menu.clearSteps')}
+                title={t('editor.menu.clearSteps')}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
           </Panel>
         </ReactFlow>
 
