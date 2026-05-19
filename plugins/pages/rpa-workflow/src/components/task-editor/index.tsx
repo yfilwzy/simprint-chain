@@ -713,15 +713,10 @@ export function TaskEditor() {
       commitEditorChange((current) => {
         let shouldAttachToSource = false;
         if (sourceId === 'start') {
-          shouldAttachToSource = !current.steps.some((step) => step.isStart);
+          shouldAttachToSource = true;
         } else if (sourceId) {
           const sourceStep = current.steps.find((step) => step.id === sourceId);
-          if (sourceStep?.type === 'condition' && branchKey) {
-            const branches = (sourceStep.config.branches as Record<string, unknown> | undefined) ?? {};
-            shouldAttachToSource = typeof branches[branchKey] !== 'string';
-          } else {
-            shouldAttachToSource = Boolean(sourceStep && !sourceStep.nextStepId);
-          }
+          shouldAttachToSource = Boolean(sourceStep);
         }
 
         const parentLoop =

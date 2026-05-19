@@ -7,8 +7,8 @@ import {
   Background,
   Controls,
   Panel,
-  useNodesState,
-  useEdgesState,
+  applyNodeChanges,
+  applyEdgeChanges,
   BackgroundVariant,
   MarkerType,
   ReactFlowProvider,
@@ -19,6 +19,8 @@ import type {
   Node,
   Edge,
   Connection,
+  EdgeChange,
+  NodeChange,
   NodeTypes,
   ReactFlowInstance,
   OnConnectEnd,
@@ -172,6 +174,19 @@ function findContainingLoopStep(
 
 function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  if (target.isContentEditable) {
+    return true;
+  }
+
+  const tagName = target.tagName.toLowerCase();
+  return tagName === 'input' || tagName === 'textarea' || tagName === 'select';
 }
 
 function getConditionBranches(step: FlowStep): Record<'true' | 'false', string | null> {
@@ -333,6 +348,72 @@ function createBaseEdge(
     labelStyle: { fill: '#64748b', fontSize: 10, fontWeight: 600 },
     labelBgStyle: { fill: 'hsl(var(--background))', fillOpacity: 0.92 },
   };
+}
+
+function disconnectEdgesFromSteps(steps: FlowStep[], removedEdges: Edge[]): FlowStep[] {
+  return steps.map((step) => {
+    let nextStepId = step.nextStepId ?? null;
+    let nextConfig = step.config;
+    let isStart = step.isStart ?? false;
+
+    for (const edge of removedEdges) {
+      if (edge.source === 'start') {
+        if (step.id === edge.target) {
+          isStart = false;
+        }
+        continue;
+      }
+
+      if (step.id !== edge.source) {
+        continue;
+      }
+
+      if (step.type === 'condition') {
+        const branchKey = edge.sourceHandle === 'branch-false' ? 'false' : 'true';
+        const currentBranches = (nextConfig.branches as Record<string, unknown> | undefined) ?? {};
+        if (currentBranches[branchKey] === edge.target) {
+          nextConfig = {
+            ...nextConfig,
+            branches: {
+              ...currentBranches,
+              [branchKey]: null,
+            },
+          };
+        }
+        continue;
+      }
+
+      if (nextStepId === edge.target) {
+        nextStepId = null;
+      }
+    }
+
+    return {
+      ...step,
+      isStart,
+      nextStepId,
+      config: nextConfig,
+    };
+  });
+}
+
+function isPersistedEdge(edge: Edge, steps: FlowStep[]): boolean {
+  if (edge.source === 'start') {
+    return steps.some((step) => step.id === edge.target && step.isStart);
+  }
+
+  const sourceStep = steps.find((step) => step.id === edge.source);
+  if (!sourceStep) {
+    return false;
+  }
+
+  if (sourceStep.type === 'condition') {
+    const branchKey = edge.sourceHandle === 'branch-false' ? 'false' : 'true';
+    const branches = getConditionBranches(sourceStep);
+    return branches[branchKey] === edge.target;
+  }
+
+  return sourceStep.nextStepId === edge.target;
 }
 
 function getReachableStepIds(steps: FlowStep[]): Set<string> {
@@ -600,7 +681,7 @@ function FlowCanvasInner({
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
   const { screenToFlowPosition } = useReactFlow();
 
-  const [nodes, setNodes, onNodesChange] = useNodesState(
+  const [nodes, setNodes] = useState<Node[]>(
     stepsToNodes(
       steps,
       onDeleteStep,
@@ -612,12 +693,51 @@ function FlowCanvasInner({
       stepLoopProgress
     )
   );
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(buildGraphEdges(steps, t));
+  const [edges, setEdges] = useState<Edge[]>(buildGraphEdges(steps, t));
 
   useEffect(() => {
     stepsRef.current = steps;
   }, [steps]);
 
+  const removeEdges = useCallback(
+    (removedEdges: Edge[]) => {
+      if (removedEdges.length === 0) {
+        return;
+      }
+
+      const nextSteps = disconnectEdgesFromSteps(stepsRef.current, removedEdges);
+      onUpdateSteps(nextSteps);
+    },
+    [onUpdateSteps]
+  );
+
+  const onNodesChange = useCallback((changes: NodeChange[]) => {
+    const filteredChanges = changes.filter(
+      (change) => change.type !== 'remove' || (change.id !== 'start' && change.id !== 'end')
+    );
+    setNodes((currentNodes) => applyNodeChanges(filteredChanges, currentNodes));
+  }, []);
+
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange<Edge>[]) => {
+      const removedEdgeIds = changes
+        .filter((change) => change.type === 'remove')
+        .map((change) => change.id);
+      const removedEdges = edges
+        .filter((edge) => removedEdgeIds.includes(edge.id))
+        .filter((edge) => isPersistedEdge(edge, stepsRef.current));
+      const effectiveChanges = changes.filter(
+        (change) => change.type !== 'remove' || removedEdges.some((edge) => edge.id === change.id)
+      );
+
+      setEdges((currentEdges) => applyEdgeChanges(effectiveChanges, currentEdges));
+
+      if (removedEdges.length > 0) {
+        removeEdges(removedEdges);
+      }
+    },
+    [edges, removeEdges]
+  );
 
   useEffect(() => {
     setNodes(
@@ -650,24 +770,15 @@ const styledEdges = useMemo(
       const sourceId = params.source;
       const targetId = params.target;
       const sourceHandle = params.sourceHandle ?? null;
-      const currentStartStep = steps.find((step) => step.isStart);
       const sourceStep = steps.find((step) => step.id === sourceId);
+      if (sourceId === targetId) {
+        return;
+      }
 
       if (sourceId === 'start') {
-        if (currentStartStep && currentStartStep.id !== targetId) {
-          return;
-        }
       } else if (!sourceStep) {
         return;
       } else if (sourceStep.type === 'break_loop') {
-        return;
-      } else if (sourceStep.type === 'condition') {
-        const branchKey = sourceHandle === 'branch-false' ? 'false' : 'true';
-        const branches = getConditionBranches(sourceStep);
-        if (branches[branchKey as 'true' | 'false'] && branches[branchKey as 'true' | 'false'] !== targetId) {
-          return;
-        }
-      } else if (sourceStep.nextStepId && sourceStep.nextStepId !== targetId) {
         return;
       }
 
@@ -761,6 +872,40 @@ const styledEdges = useMemo(
   const onPaneClick = useCallback(() => {
     onSelectStep(null);
   }, [onSelectStep]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isEditableTarget(event.target)) {
+        return;
+      }
+
+      if (event.key !== 'Delete' && event.key !== 'Backspace') {
+        return;
+      }
+
+      const selectedEdges = edges.filter((edge) => edge.selected);
+      if (selectedEdges.length > 0) {
+        event.preventDefault();
+        removeEdges(selectedEdges);
+        return;
+      }
+
+      const selectedStepIds = nodes
+        .filter((node) => node.selected && node.id !== 'start' && node.id !== 'end')
+        .map((node) => node.id);
+      if (selectedStepIds.length === 0) {
+        return;
+      }
+
+      event.preventDefault();
+      selectedStepIds.forEach((stepId) => onDeleteStep(stepId));
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [edges, nodes, onDeleteStep, removeEdges]);
 
   const onNodeDragStop = useCallback(
     (event: ReactMouseEvent, node: Node) => {
@@ -979,6 +1124,7 @@ const styledEdges = useMemo(
           className="bg-background"
           style={{ pointerEvents: draggingComponent ? 'none' : 'auto' }}
           connectOnClick={false}
+          deleteKeyCode={null}
         >
           <Background
             variant={BackgroundVariant.Dots}
