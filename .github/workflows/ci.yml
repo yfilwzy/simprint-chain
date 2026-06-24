@@ -1,0 +1,69 @@
+name: ci
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "deploy/**"
+      - "src/**"
+      - "src-tauri/**"
+      - "plugins/**"
+      - "index.html"
+      - "splashscreen.html"
+      - "vite.config.ts"
+      - "build.cjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+      - "deploy/**"
+      - "src/**"
+      - "src-tauri/**"
+      - "plugins/**"
+      - "index.html"
+      - "splashscreen.html"
+      - "vite.config.ts"
+      - "build.cjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+
+jobs:
+  check:
+    runs-on: windows-latest
+    env:
+      ENV_NAME: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare app config
+        shell: powershell
+        run: |
+          Copy-Item "src-tauri/config.example.toml" "src-tauri/config.production.toml" -Force
+
+      - name: Build frontend
+        run: node build.cjs
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust check
+        working-directory: src-tauri
+        run: cargo check
+

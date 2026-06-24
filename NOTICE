@@ -1,0 +1,64 @@
+NOTICE — simprint-chain
+=======================
+
+This repository is a derived/modified work based on **Simprint**
+(upstream project: https://github.com/Simprint/simprint ), which is
+licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+
+In accordance with section 5 of the AGPLv3, this derivative carries
+prominent notices stating that it has been modified, together with a
+relevant date, and remains licensed under AGPLv3 in its entirety.
+
+
+Original work
+-------------
+- Project:    Simprint
+- Upstream:   https://github.com/Simprint/simprint
+- License:    GNU AGPLv3
+- Copyright:  retained by the original Simprint authors
+
+
+Modifications in this derivative
+--------------------------------
+Modified by: yfilwzy (https://github.com/yfilwzy)
+Date:        2026-06
+
+Key modifications applied on top of the upstream Simprint source:
+
+1. Updater
+   - Removed the official Tauri plugin updater (tauri-plugin-updater).
+   - Replaced it with a self-developed update channel backed by
+     `src-tauri/src/services/updater/` and the standalone
+     `src-tauri/src/bin/updater.rs` binary, talking to a user-controlled
+     update server instead of the official Tauri endpoints.
+
+2. Proxy chain
+   - Added a chain-proxy capability under
+     `src-tauri/src/services/proxy_chain/` (subscription parsing,
+     Mihomo config generation, process management, node delay testing
+     and selection) plus the matching frontend panel
+     `plugins/pages/proxy-center/`.
+
+3. Build/runtime hygiene
+   - Local runtime configs containing secrets are excluded from version
+     control (see .gitignore); only `src-tauri/config.example.toml`
+     ships as a placeholder template.
+
+
+License
+-------
+The whole of this work remains licensed under the GNU Affero General
+Public License v3.0. See the `LICENSE` file for the full terms.
+
+Because AGPLv3 section 13 applies, anyone who interacts with this
+software remotely over a network is entitled to receive the
+Corresponding Source of this modified version. The complete source
+code is published at this repository.
+
+
+Trademarks / Endorsement
+------------------------
+"Simprint" is the name of the upstream project. This derivative is an
+independent fork and is NOT endorsed by, affiliated with, or sponsored
+by the upstream Simprint authors. All trademarks belong to their
+respective owners.

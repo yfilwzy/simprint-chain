@@ -1,0 +1,14 @@
+[server]
+# Replace with your own self-hosted server. See README for setup.
+base_url = "http://127.0.0.1:40041/api/"
+version = "v1"
+secret_key = "REPLACE_WITH_YOUR_OWN_SECRET_KEY"
+
+[updater]
+check_url = "https://update.simprint.app/api/v1/versions/check"
+latest_json_url = "https://pub-39307a5e69c74324855a762027cbf9bf.r2.dev/latest.json"
+runtime_latest_json_url = "https://pub-d9427ecc5980437ba1445fc79ea593bd.r2.dev/simprint-runtime/latest.json"
+updater_temp_dir = "updates"
+
+[webview]
+downlaod_url = "https://pub-39307a5e69c74324855a762027cbf9bf.r2.dev/webview-fixed.zip"

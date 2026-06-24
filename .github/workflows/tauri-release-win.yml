@@ -1,0 +1,118 @@
+name: tauri-release-windows
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: windows-2025
+    permissions:
+      contents: write
+
+    env:
+      ENV_NAME: production
+      RELEASE_TAG: ${{ github.ref_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare app config
+        shell: powershell
+        env:
+          # Optional overrides. If these are not configured, the workflow
+          # will keep the defaults from src-tauri/config.example.toml.
+          APP_SERVER_BASE_URL: ${{ secrets.APP_SERVER_BASE_URL }}
+          APP_SERVER_VERSION: ${{ secrets.APP_SERVER_VERSION }}
+          APP_SERVER_SECRET_KEY: ${{ secrets.APP_SERVER_SECRET_KEY }}
+          APP_UPDATER_CHECK_URL: ${{ secrets.APP_UPDATER_CHECK_URL }}
+          APP_UPDATER_LATEST_JSON_URL: ${{ secrets.APP_UPDATER_LATEST_JSON_URL }}
+          APP_RUNTIME_LATEST_JSON_URL: ${{ secrets.APP_RUNTIME_LATEST_JSON_URL }}
+          APP_UPDATER_TEMP_DIR: ${{ secrets.APP_UPDATER_TEMP_DIR }}
+          APP_WEBVIEW_DOWNLOAD_URL: ${{ secrets.APP_WEBVIEW_DOWNLOAD_URL }}
+        run: |
+          Copy-Item "src-tauri/config.example.toml" "src-tauri/config.production.toml" -Force
+
+          $configPath = "src-tauri/config.production.toml"
+          $content = Get-Content $configPath -Raw
+
+          function Set-ConfigValue {
+            param(
+              [string]$Pattern,
+              [string]$Value
+            )
+
+            if ([string]::IsNullOrWhiteSpace($Value)) {
+              return
+            }
+
+            $escapedValue = $Value.Replace('\', '\\').Replace('"', '\"')
+            $script:content = [regex]::Replace(
+              $script:content,
+              $Pattern,
+              ('$1"{0}"' -f $escapedValue),
+              [System.Text.RegularExpressions.RegexOptions]::Multiline
+            )
+          }
+
+          Set-ConfigValue '^(base_url\s*=\s*)".*"$' "${{ env.APP_SERVER_BASE_URL }}"
+          Set-ConfigValue '^(version\s*=\s*)".*"$' "${{ env.APP_SERVER_VERSION }}"
+          Set-ConfigValue '^(secret_key\s*=\s*)".*"$' "${{ env.APP_SERVER_SECRET_KEY }}"
+          Set-ConfigValue '^(check_url\s*=\s*)".*"$' "${{ env.APP_UPDATER_CHECK_URL }}"
+          Set-ConfigValue '^(latest_json_url\s*=\s*)".*"$' "${{ env.APP_UPDATER_LATEST_JSON_URL }}"
+          Set-ConfigValue '^(runtime_latest_json_url\s*=\s*)".*"$' "${{ env.APP_RUNTIME_LATEST_JSON_URL }}"
+          Set-ConfigValue '^(updater_temp_dir\s*=\s*)".*"$' "${{ env.APP_UPDATER_TEMP_DIR }}"
+          Set-ConfigValue '^(downlaod_url\s*=\s*)".*"$' "${{ env.APP_WEBVIEW_DOWNLOAD_URL }}"
+
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+          $resolvedConfigPath = (Resolve-Path $configPath).Path
+          [System.IO.File]::WriteAllText($resolvedConfigPath, $content, $utf8NoBom)
+
+      - name: Use fixed Tauri config
+        shell: powershell
+        run: |
+          Copy-Item "src-tauri/tauri.conf.fixed.json" "src-tauri/tauri.conf.json" -Force
+
+      - name: Prepare version from tag
+        run: node deploy/prepare-version.mjs
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        with:
+          projectPath: .
+          args: --features production
+
+      - name: Generate latest.json
+        run: node deploy/generate-latest-json.mjs
+
+      - name: Publish GitHub release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node deploy/publish-github-release.mjs

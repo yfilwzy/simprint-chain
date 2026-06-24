@@ -1,0 +1,68 @@
+export const authResources = {
+  'zh-CN': {
+    login: {
+      title: '欢迎回来',
+      subtitle: '登录您的账户以继续',
+      emailLabel: '邮箱地址',
+      emailPlaceholder: '请输入您的邮箱',
+      passwordLabel: '密码',
+      passwordPlaceholder: '请输入您的密码',
+      remember: '记住密码',
+      forgot: '忘记密码？',
+      submit: '登录',
+      register: '注册',
+      err: {
+        emailRequired: '请输入邮箱地址',
+        emailInvalid: '请输入有效的邮箱地址',
+        failed: '登录失败，请检查您的凭据',
+        failedGeneric: '登录失败',
+      },
+    },
+    register: {
+      title: '创建账户',
+      subtitle: '注册新账户以开始使用',
+    },
+    reset: {
+      title: '重置密码',
+      subtitleStep1: '通过邮箱重置您的密码',
+      subtitleStep2: '请输入验证码和新密码',
+      backToLogin: '返回登录',
+      sendCode: '发送验证码',
+      emailPlaceholder: '请输入您的注册邮箱',
+      hint: '我们将向您的邮箱发送验证码，请查收邮件并输入验证码。',
+    },
+  },
+  'en-US': {
+    login: {
+      title: 'Welcome back',
+      subtitle: 'Sign in to continue',
+      emailLabel: 'Email',
+      emailPlaceholder: 'Enter your email',
+      passwordLabel: 'Password',
+      passwordPlaceholder: 'Enter your password',
+      remember: 'Remember me',
+      forgot: 'Forgot password?',
+      submit: 'Sign in',
+      register: 'Sign up',
+      err: {
+        emailRequired: 'Email is required',
+        emailInvalid: 'Please enter a valid email',
+        failed: 'Sign-in failed. Please check your credentials.',
+        failedGeneric: 'Sign-in failed',
+      },
+    },
+    register: {
+      title: 'Create account',
+      subtitle: 'Sign up to get started',
+    },
+    reset: {
+      title: 'Reset password',
+      subtitleStep1: 'Reset your password via email',
+      subtitleStep2: 'Enter the code and your new password',
+      backToLogin: 'Back to login',
+      sendCode: 'Send code',
+      emailPlaceholder: 'Enter your registered email',
+      hint: 'We will email you a verification code. Please enter it below.',
+    },
+  },
+} as const;
