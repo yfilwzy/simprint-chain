@@ -1,6 +1,6 @@
 [package]
 name = "simprint"
-version = "0.1.0"
+version = "0.2.26-chain.1"
 description = "Simprint Browser"
 authors = ["liusnew"]
 edition = "2024"
