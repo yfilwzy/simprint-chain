@@ -1,7 +1,7 @@
 // Package main: Simprint 自托管服务器 Go 骨架。
 // 配合 03/05 设计文档；加密协议细节见 crypto.go 注释和 03 文档第二节。
 //
-// main.go —— 应用入口：加载配置 -> 准备密钥 -> 注册路由 -> 启动 HTTP 服务。
+// main.go —— 应用入口：加载配置 -> 准备密钥 -> 连接 DB -> 注册路由 -> 启动 HTTP 服务。
 //
 // 路由（03 文档 §3，客户端 base_url=.../api/）：
 //   GET  /api/v1/secret/public/key                 GetPublicKey
@@ -16,9 +16,11 @@
 package main
 
 import (
-	"crypto/rsa"
+	"context"
+	"database/sql"
 	"log"
 	"net/http"
+	"time"
 )
 
 func main() {
@@ -27,19 +29,45 @@ func main() {
 		log.Fatalf("load config failed: %v", err)
 	}
 
+	// 1. 加载/生成服务端 RSA 密钥对（PKCS1 PEM）
+	privKey, pubPEM, err := LoadServerKeys(cfg.RSAPrivateKeyPath, cfg.RSAPublicKeyPath)
+	if err != nil {
+		log.Fatalf("load server rsa keys failed: %v", err)
+	}
+	log.Printf("server RSA key ready (PKCS1), public key head: %q", headPEM(pubPEM))
+
+	// 2. 连接 PostgreSQL
+	db, err := sql.Open("postgres", cfg.DSN())
+	if err != nil {
+		log.Fatalf("open db failed: %v", err)
+	}
+	db.SetMaxOpenConns(15)
+	db.SetMaxIdleConns(3)
+	db.SetConnMaxLifetime(30 * time.Minute)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		log.Fatalf("db ping failed: %v", err)
+	}
+	log.Printf("connected to PostgreSQL %s:%s db=%s", cfg.DBHost, cfg.DBPort, cfg.DBName)
+
 	app := &App{
-		Config: cfg,
-		// TODO: 从 cfg.RSAPrivateKeyPath 加载服务端 RSA 私钥（PEM, PKCS1），
-		//       若文件缺失则调用 GenerateRSAKeyPair(2048) 生成并落盘。
-		//       ServerPubKeyPEM 填充 PKCS1 PEM 字符串。
-		ServerPrivKey:   (*rsa.PrivateKey)(nil),
-		ServerPubKeyPEM: "", // TODO: 加载真实公钥 PEM
+		Config:          cfg,
+		ServerPrivKey:   privKey,
+		ServerPubKeyPEM: pubPEM,
+		DB:              db,
+		clientKeyCache:  newTokenKeyCache(),
 	}
 
 	mux := http.NewServeMux()
 
 	// 健康检查（运维必需）
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		if err := db.PingContext(r.Context()); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "db-down", "error": err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
@@ -56,10 +84,22 @@ func main() {
 	mux.HandleFunc("POST /update/api/v1/versions/check", app.CheckVersion)
 	mux.HandleFunc("GET /update/latest.json", app.GetLatestJson)
 	mux.HandleFunc("GET /update/simprint-runtime/latest.json", app.GetRuntimeLatestJson)
+	mux.HandleFunc("GET /update/webview-fixed.zip", app.ServeWebviewZip)
 
 	addr := ":" + cfg.ServerPort
 	log.Printf("simprint-server listening on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("server stopped: %v", err)
 	}
+}
+
+// headPEM 返回 PEM 的首行（用于启动日志，不含密钥本体）。
+func headPEM(pem string) string {
+	for i, line := 0, ""; i < len(pem); i++ {
+		if pem[i] == '\n' {
+			return line
+		}
+		line += string(pem[i])
+	}
+	return pem
 }

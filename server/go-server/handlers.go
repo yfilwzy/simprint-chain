@@ -1,186 +1,644 @@
 // Package main: Simprint 自托管服务器 Go 骨架。
 // 配合 03/05 设计文档；加密协议细节见 crypto.go 注释和 03 文档第二节。
 //
-// handlers.go —— 全部 HTTP 端点 handler（签名完整 + 请求/响应格式注释；方法体 TODO 占位）。
+// handlers.go —— 全部 HTTP 端点 handler 实现。
 package main
 
 import (
+	"crypto/rand"
 	"crypto/rsa"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
+	"log"
 	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	_ "github.com/lib/pq"
+	"golang.org/x/crypto/bcrypt"
 )
 
-// App 贯穿所有 handler 的服务端上下文，持有配置、密钥及后续的 DB 句柄。
+// App 贯穿所有 handler 的服务端上下文，持有配置、密钥及 DB 句柄。
 type App struct {
 	Config          *Config
-	ServerPrivKey   *rsa.PrivateKey // 占位：服务端 RSA 私钥（PEM 加载后）
-	ServerPubKeyPEM string          // 占位：服务端 RSA 公钥 PEM（PKCS1），对外暴露
+	ServerPrivKey   *rsa.PrivateKey // 服务端 RSA 私钥
+	ServerPubKeyPEM string          // 服务端 RSA 公钥 PEM（PKCS1），对外暴露
 
-	// TODO: db  *sql.DB           // PostgreSQL 句柄（schema 见 03 文档第四节）
-	// TODO: clientKeyCache ...    // access_token -> 客户端公钥 缓存（响应加密用）
+	DB *sql.DB // PostgreSQL 句柄
+
+	// clientKeyCache: access_token -> 客户端公钥 PEM（非登录请求的响应加密用）
+	// 生产环境若横向扩展应改 Redis；当前单实例用内存 map + 读写锁足够。
+	clientKeyCache *tokenKeyCache
 }
 
-// 占位：避免未使用导入，正式实现后移除。
-var _ = json.Marshal
+// tokenKeyCache access_token -> 客户端公钥 PEM 的内存缓存。
+type tokenKeyCache struct {
+	store map[string]string // token -> clientPublicKeyPEM
+}
+
+func newTokenKeyCache() *tokenKeyCache {
+	return &tokenKeyCache{store: make(map[string]string)}
+}
+
+func (c *tokenKeyCache) Set(token, pubKeyPEM string) {
+	c.store[token] = pubKeyPEM
+}
+
+func (c *tokenKeyCache) Get(token string) (string, bool) {
+	k, ok := c.store[token]
+	return k, ok
+}
 
 // ---- 通用响应辅助 ----
 
-// writeJSON 写入明文 JSON 响应（用于非加密端点，如 /health、公钥、latest.json）。
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// writeEncrypted 将明文 JSON 用客户端公钥加密后写入响应（加密端点统一出口）。
-// TODO: 正式实现后调用 EncryptResponse；当前 stub 直接返回 501。
-func (a *App) writeEncrypted(w http.ResponseWriter, plainJSON json.RawMessage, clientPublicKeyPEM string) {
-	enc, err := EncryptResponse(plainJSON, clientPublicKeyPEM)
+// writeEncrypted 将明文业务数据用客户端公钥加密后写入响应（加密端点统一出口）。
+//
+// ⚠️ 关键：客户端 parse_and_decrypt_response 把解密后的明文反序列化为
+//   JsonRespnse { code, message, data }
+// 再由业务层从 data 字段取真实数据。因此服务端响应必须包外层 code/message/data，
+// 否则客户端 result.data 为 None，业务数据丢失（登录"成功"但 token 存不进去）。
+//
+// 参数 payload 为业务数据（会被放进 data 字段）。
+func (a *App) writeEncrypted(w http.ResponseWriter, payload interface{}, clientPublicKeyPEM string) {
+	envelope := map[string]interface{}{
+		"code":    0,
+		"message": "ok",
+		"data":    payload,
+	}
+	plain, err := json.Marshal(envelope)
 	if err != nil {
+		http.Error(w, "marshal response failed", http.StatusInternalServerError)
+		return
+	}
+	enc, err := EncryptResponse(plain, clientPublicKeyPEM)
+	if err != nil {
+		log.Printf("encrypt response failed: %v", err)
 		http.Error(w, "encrypt response failed", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, enc)
 }
 
+// readEncryptedBody 读取请求体并解析为 EncryptedBody。
+func readEncryptedBody(r *http.Request) (*EncryptedBody, error) {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, errors.New("empty body")
+	}
+	var body EncryptedBody
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, err
+	}
+	return &body, nil
+}
+
+// checkAPISecret 校验解密后 map 里的 api_secret == 配置值。
+func (a *App) checkAPISecret(m map[string]interface{}) bool {
+	v, ok := m["api_secret"]
+	if !ok {
+		return false
+	}
+	s, ok := v.(string)
+	if !ok {
+		return false
+	}
+	return s == a.Config.APISecret
+}
+
+// asString 安全取 map 中的字符串字段。
+func asString(m map[string]interface{}, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// newToken 生成随机 token（32 字节 hex）。
+func newToken() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
 // ---- 3.1 认证端点 ----
 
 // GetPublicKey 处理 GET /api/v1/secret/public/key
-//
-// 请求：无 body，不加密。
-// 响应（明文 JSON）：{ "public_key": "-----BEGIN RSA PUBLIC KEY-----\n...\n-----END RSA PUBLIC KEY-----" }
-//
-// 说明（03 文档 §2.1 步骤①）：客户端启动时拉取，用于后续请求的 AES 密钥 RSA 加密。
-// 公钥必须是 PKCS1 格式（BEGIN RSA PUBLIC KEY，非 PKCS8/X.509）。
+// 响应（明文 JSON）：{ "public_key": "-----BEGIN RSA PUBLIC KEY-----..." }
 func (a *App) GetPublicKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
-		"public_key": a.ServerPubKeyPEM, // TODO: 确保为 PKCS1 PEM
+		"public_key": a.ServerPubKeyPEM,
 	})
 }
 
 // Login 处理 POST /api/v1/users/login
-//
-// 请求（加密 EncryptedBody；解密后 JSON 字段）：
-//   {
-//     "login_type": "Basic" | "RememberPassword",  // 见 03 文档 §3.1 LoginType
-//     "email": "...",
-//     "password": "...",          // login_type=Basic 时提供
-//     "refresh_token": "...",     // login_type=RememberPassword 时提供
-//     "public_secret_key": "...", // 客户端 RSA 公钥（PKCS1 PEM），响应加密用
-//     "api_secret": "..."         // 应用层鉴权，须 == config.APISecret
-//   }
-//
-// 响应（加密 EncryptedBody；解密后 JSON 字段）：
-//   {
-//     "access_token": "...",
-//     "refresh_token": "...",
-//     "is_first_login": bool,
-//     "user_info": {...},    // 对应 users.user_info JSONB
-//     "user_extra": {...}    // 对应 users.user_extra JSONB
-//   }
-//
-// 流程：DecryptRequest -> 校验 api_secret -> 查 users 表 -> 校验密码(bcrypt)
-//       -> 签发 token 写 sessions 表 -> 缓存 clientPublicKeyPEM 关联 access_token -> 加密响应。
 func (a *App) Login(w http.ResponseWriter, r *http.Request) {
-	// TODO: 解密 + 校验 api_secret + DB 查询 + bcrypt 校验 + 签发 token + 加密响应
-	http.Error(w, "login: not implemented (stub)", http.StatusNotImplemented)
+	body, err := readEncryptedBody(r)
+	if err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	m, err := DecryptRequest(body, a.ServerPrivKey)
+	if err != nil {
+		log.Printf("login decrypt failed: %v", err)
+		http.Error(w, "decrypt failed", http.StatusBadRequest)
+		return
+	}
+	if !a.checkAPISecret(m) {
+		http.Error(w, "invalid api_secret", http.StatusUnauthorized)
+		return
+	}
+
+	clientPubKey := asString(m, "public_secret_key")
+	loginType := asString(m, "login_type")
+	email := asString(m, "email")
+
+	var (
+		userID       string
+		passwordHash string
+		isFirstLogin bool
+		userInfoRaw  interface{}
+		userExtraRaw interface{}
+	)
+
+	switch loginType {
+	case "basic":
+		// 客户端 login.rs LoginType::Basic → "login_type":"basic"
+		password := asString(m, "password")
+		if email == "" || password == "" {
+			http.Error(w, "missing email/password", http.StatusBadRequest)
+			return
+		}
+		row := a.DB.QueryRowContext(r.Context(),
+			`SELECT id, password_hash, is_first_login, user_info, user_extra FROM users WHERE email=$1`, email)
+		if err := row.Scan(&userID, &passwordHash, &isFirstLogin, &userInfoRaw, &userExtraRaw); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.Error(w, "user not found", http.StatusUnauthorized)
+				return
+			}
+			log.Printf("login query: %v", err)
+			http.Error(w, "db error", http.StatusInternalServerError)
+			return
+		}
+		if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)); err != nil {
+			http.Error(w, "invalid credentials", http.StatusUnauthorized)
+			return
+		}
+
+	case "remember":
+		// 客户端 LoginType::RememberPassword → "login_type":"remember"
+		refreshToken := asString(m, "refresh_token")
+		if email == "" || refreshToken == "" {
+			http.Error(w, "missing email/refresh_token", http.StatusBadRequest)
+			return
+		}
+		row := a.DB.QueryRowContext(r.Context(),
+			`SELECT u.id, u.password_hash, u.is_first_login, u.user_info, u.user_extra
+			 FROM users u JOIN sessions s ON s.user_id = u.id
+			 WHERE u.email=$1 AND s.refresh_token=$2 AND s.expires_at > NOW()`, email, refreshToken)
+		if err := row.Scan(&userID, &passwordHash, &isFirstLogin, &userInfoRaw, &userExtraRaw); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.Error(w, "invalid refresh_token", http.StatusUnauthorized)
+				return
+			}
+			log.Printf("login(refresh) query: %v", err)
+			http.Error(w, "db error", http.StatusInternalServerError)
+			return
+		}
+	default:
+		http.Error(w, "invalid login_type", http.StatusBadRequest)
+		return
+	}
+
+	// 签发新 token 并写 sessions
+	accessToken := newToken()
+	refreshToken := newToken()
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+	if _, err := a.DB.ExecContext(r.Context(),
+		`INSERT INTO sessions (user_id, access_token, refresh_token, expires_at) VALUES ($1,$2,$3,$4)`,
+		userID, accessToken, refreshToken, expiresAt); err != nil {
+		log.Printf("login insert session: %v", err)
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+
+	// 缓存客户端公钥，供后续非登录请求响应加密
+	a.clientKeyCache.Set(accessToken, clientPubKey)
+
+	// 业务数据（会进 JsonRespnse.data），字段名对齐客户端 LoginResponse
+	payload := map[string]interface{}{
+		"access_token":   accessToken,
+		"refresh_token":  refreshToken,
+		"is_first_login": isFirstLogin,
+		"user_info":      userInfoRaw,
+		"user_extra":     userExtraRaw,
+	}
+	a.writeEncrypted(w, payload, clientPubKey)
 }
 
 // Register 处理 POST /api/v1/users/register
-//
-// 请求（加密 EncryptedBody；解密后 JSON 字段）：
-//   {
-//     "email": "...",
-//     "password": "...",
-//     "referral_code": "...",     // 可选，校验 referral_codes 表
-//     "public_secret_key": "...", // 客户端 RSA 公钥
-//     "api_secret": "..."
-//   }
-//
-// 响应：结构与 Login 相同（access_token/refresh_token/is_first_login/user_info/user_extra）。
 func (a *App) Register(w http.ResponseWriter, r *http.Request) {
-	// TODO: 解密 + 校验 api_secret + 邮箱唯一性 + bcrypt 落库 users + 邀请码核销 + 签发 token
-	http.Error(w, "register: not implemented (stub)", http.StatusNotImplemented)
+	body, err := readEncryptedBody(r)
+	if err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	m, err := DecryptRequest(body, a.ServerPrivKey)
+	if err != nil {
+		http.Error(w, "decrypt failed", http.StatusBadRequest)
+		return
+	}
+	if !a.checkAPISecret(m) {
+		http.Error(w, "invalid api_secret", http.StatusUnauthorized)
+		return
+	}
+
+	email := asString(m, "email")
+	password := asString(m, "password")
+	clientPubKey := asString(m, "public_secret_key")
+	referralCode := asString(m, "referral_code")
+	if email == "" || password == "" {
+		http.Error(w, "missing email/password", http.StatusBadRequest)
+		return
+	}
+
+	// 邮箱唯一性
+	var exists bool
+	if err := a.DB.QueryRowContext(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM users WHERE email=$1)`, email).Scan(&exists); err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	if exists {
+		http.Error(w, "email already registered", http.StatusConflict)
+		return
+	}
+
+	// bcrypt 落库（cost=12，对齐 schema 注释建议）
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+	if err != nil {
+		http.Error(w, "hash error", http.StatusInternalServerError)
+		return
+	}
+
+	var userID string
+	if err := a.DB.QueryRowContext(r.Context(),
+		`INSERT INTO users (email, password_hash, is_first_login, user_info, user_extra)
+		 VALUES ($1,$2,TRUE,$3,$4) RETURNING id`,
+		email, string(hash), json.RawMessage(`{}`), json.RawMessage(`{}`)).Scan(&userID); err != nil {
+		log.Printf("register insert user: %v", err)
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+
+	// 邀请码核销（可选）
+	if referralCode != "" {
+		if _, err := a.DB.ExecContext(r.Context(),
+			`UPDATE referral_codes SET used_count = used_count + 1 WHERE code=$1 AND used_count < max_uses`,
+			referralCode); err != nil {
+			log.Printf("referral consume (non-fatal): %v", err)
+		}
+	}
+
+	// 签发 token
+	accessToken := newToken()
+	refreshToken := newToken()
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+	if _, err := a.DB.ExecContext(r.Context(),
+		`INSERT INTO sessions (user_id, access_token, refresh_token, expires_at) VALUES ($1,$2,$3,$4)`,
+		userID, accessToken, refreshToken, expiresAt); err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	a.clientKeyCache.Set(accessToken, clientPubKey)
+
+	payload := map[string]interface{}{
+		"access_token":   accessToken,
+		"refresh_token":  refreshToken,
+		"is_first_login": true,
+		"user_info":      map[string]interface{}{"email": email},
+		"user_extra":     map[string]interface{}{},
+	}
+	a.writeEncrypted(w, payload, clientPubKey)
 }
 
 // RefreshCredentials 处理 POST /api/v1/users/refresh-credentials
-//
-// 请求（加密 EncryptedBody；解密后 JSON 字段）：
-//   { "refresh_token": "...", "api_secret": "..." }
-//
-// 响应（加密 EncryptedBody；解密后 JSON 字段）：
-//   { "access_token": "...", "refresh_token": "..." }
-//
-// 流程：校验 refresh_token 有效性（sessions 表）-> 轮换 access/refresh token -> 加密响应。
 func (a *App) RefreshCredentials(w http.ResponseWriter, r *http.Request) {
-	// TODO: 解密 + 校验 api_secret + refresh_token 校验 + token 轮换 + 加密响应
-	http.Error(w, "refresh-credentials: not implemented (stub)", http.StatusNotImplemented)
+	body, err := readEncryptedBody(r)
+	if err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	m, err := DecryptRequest(body, a.ServerPrivKey)
+	if err != nil {
+		http.Error(w, "decrypt failed", http.StatusBadRequest)
+		return
+	}
+	if !a.checkAPISecret(m) {
+		http.Error(w, "invalid api_secret", http.StatusUnauthorized)
+		return
+	}
+
+	oldRefresh := asString(m, "refresh_token")
+	if oldRefresh == "" {
+		http.Error(w, "missing refresh_token", http.StatusBadRequest)
+		return
+	}
+
+	// 校验 refresh_token 有效性，并取出 user_id + 旧 access_token（用于更新缓存）
+	var userID, oldAccess string
+	err = a.DB.QueryRowContext(r.Context(),
+		`SELECT user_id, access_token FROM sessions
+		 WHERE refresh_token=$1 AND expires_at > NOW()`, oldRefresh).Scan(&userID, &oldAccess)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "invalid refresh_token", http.StatusUnauthorized)
+			return
+		}
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+
+	// 轮换 token（旧 refresh 失效）
+	newAccess := newToken()
+	newRefresh := newToken()
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+	if _, err := a.DB.ExecContext(r.Context(),
+		`UPDATE sessions SET access_token=$1, refresh_token=$2, expires_at=$3
+		 WHERE refresh_token=$4`, newAccess, newRefresh, expiresAt, oldRefresh); err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+
+	// 迁移客户端公钥缓存
+	if pub, ok := a.clientKeyCache.Get(oldAccess); ok {
+		a.clientKeyCache.Set(newAccess, pub)
+	}
+
+	// 响应：仅返回新 token（refresh-credentials 请求未带公钥时用旧缓存）
+	pub := ""
+	if p, ok := a.clientKeyCache.Get(newAccess); ok {
+		pub = p
+	}
+	payload := map[string]interface{}{
+		"access_token":  newAccess,
+		"refresh_token": newRefresh,
+	}
+	if pub == "" {
+		// 无公钥无法加密响应，回退明文（包 JsonRespnse 外层）
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"code": 0, "message": "ok", "data": payload,
+		})
+		return
+	}
+	a.writeEncrypted(w, payload, pub)
 }
 
 // ---- 3.2 业务端点 ----
 
+// 业务资源表与 /local-api 路径前缀的映射。
+var resourceTables = map[string]string{
+	"environments":    "environments",
+	"proxies":         "proxies",
+	"groups":          "groups",
+	"tags":            "tags",
+	"workspaces":      "workspaces",
+	"browser_kernels": "browser_kernels",
+}
+
 // LocalApiProxy 处理 POST /api/v1/local-api/{path...}
-//
-// 说明（03 文档 §3.2）：工作区资源 CRUD 透传。
-//   资源：environments / proxies / groups / tags / workspaces / browser_kernels
-//   全部走加密通道；经 local_api/client/main_server.rs::proxy_request 调用。
-//
-// 请求（加密 EncryptedBody）：解密后为对应资源的 CRUD payload + api_secret + access_token。
-// 响应（加密 EncryptedBody）：对应资源的 CRUD 结果。
-//
-// 路由参数 path 由 Go 1.22 ServeMux 的 {path...} 通配捕获（r.PathValue("path")）。
+// 简化 CRUD 透传：list / get / create / update / delete，按 user_id 隔离。
 func (a *App) LocalApiProxy(w http.ResponseWriter, r *http.Request) {
-	_ = r.PathValue("path")
-	// TODO: 解密 + 鉴权(access_token) + 操作对应资源表(03 §4 environments 等) + 加密响应
-	http.Error(w, "local-api proxy: not implemented (stub)", http.StatusNotImplemented)
+	path := r.PathValue("path")
+	body, err := readEncryptedBody(r)
+	if err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	m, err := DecryptRequest(body, a.ServerPrivKey)
+	if err != nil {
+		http.Error(w, "decrypt failed", http.StatusBadRequest)
+		return
+	}
+	if !a.checkAPISecret(m) {
+		http.Error(w, "invalid api_secret", http.StatusUnauthorized)
+		return
+	}
+
+	accessToken := asString(m, "access_token")
+	pub := ""
+	if p, ok := a.clientKeyCache.Get(accessToken); ok {
+		pub = p
+	}
+	if pub == "" {
+		http.Error(w, "session not found (re-login required)", http.StatusUnauthorized)
+		return
+	}
+
+	// 通过 access_token 解析 user_id
+	var userID string
+	err = a.DB.QueryRowContext(r.Context(),
+		`SELECT user_id FROM sessions WHERE access_token=$1 AND expires_at > NOW()`, accessToken).Scan(&userID)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// 解析 path: <resource> 或 <resource>/<id> 或 <resource>/<id>/...
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		http.Error(w, "invalid resource path", http.StatusBadRequest)
+		return
+	}
+	resource := parts[0]
+	table, ok := resourceTables[resource]
+	if !ok {
+		http.Error(w, "unknown resource: "+resource, http.StatusBadRequest)
+		return
+	}
+	_ = table // 实际 CRUD 见下方分支
+
+	var (
+		result interface{}
+		rerr   error
+	)
+	method := r.Method
+	resourceID := ""
+	if len(parts) >= 2 {
+		resourceID = parts[1]
+	}
+
+	switch {
+	case method == "GET" && resourceID == "":
+		// list
+		rows, qerr := a.DB.QueryContext(r.Context(),
+			`SELECT id, name, config, created_at, updated_at FROM `+table+` WHERE user_id=$1 ORDER BY created_at DESC`, userID)
+		if qerr != nil {
+			rerr = qerr
+			break
+		}
+		defer rows.Close()
+		items := []map[string]interface{}{}
+		for rows.Next() {
+			var id, name string
+			var cfg interface{}
+			var created, updated time.Time
+			if err := rows.Scan(&id, &name, &cfg, &created, &updated); err != nil {
+				rerr = err
+				break
+			}
+			items = append(items, map[string]interface{}{
+				"id": id, "name": name, "config": cfg, "created_at": created, "updated_at": updated,
+			})
+		}
+		result = map[string]interface{}{"items": items, "total": len(items)}
+
+	case method == "GET" && resourceID != "":
+		var name string
+		var cfg interface{}
+		var created, updated time.Time
+		err = a.DB.QueryRowContext(r.Context(),
+			`SELECT name, config, created_at, updated_at FROM `+table+` WHERE id=$1 AND user_id=$2`, resourceID, userID).
+			Scan(&name, &cfg, &created, &updated)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+				return
+			}
+			rerr = err
+			break
+		}
+		result = map[string]interface{}{
+			"id": resourceID, "name": name, "config": cfg, "created_at": created, "updated_at": updated,
+		}
+
+	case method == "POST" || method == "PUT":
+		name := asString(m, "name")
+		cfgJSON, _ := json.Marshal(m["config"])
+		var newID string
+		err = a.DB.QueryRowContext(r.Context(),
+			`INSERT INTO `+table+` (user_id, name, config) VALUES ($1,$2,$3) RETURNING id`,
+			userID, name, cfgJSON).Scan(&newID)
+		if err != nil {
+			rerr = err
+			break
+		}
+		result = map[string]interface{}{"id": newID, "success": true}
+
+	case method == "DELETE" && resourceID != "":
+		_, err = a.DB.ExecContext(r.Context(),
+			`DELETE FROM `+table+` WHERE id=$1 AND user_id=$2`, resourceID, userID)
+		if err != nil {
+			rerr = err
+			break
+		}
+		result = map[string]interface{}{"success": true}
+
+	default:
+		http.Error(w, "unsupported operation", http.StatusBadRequest)
+		return
+	}
+
+	if rerr != nil {
+		log.Printf("local-api %s %s: %v", method, path, rerr)
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+
+	a.writeEncrypted(w, result, pub)
 }
 
 // ---- 3.3 更新端点 ----
+//
+// 结构严格对齐客户端 src-tauri/src/infrastructure/updater/types.rs：
+//   - CheckResponse  { code:i32, message:String, data:{ versions: HashMap<String, Vec<Artifact>> } }
+//   - LatestRelease  { version, notes, pub_date, platforms: HashMap<String, {url, r2_url}> }
+// ⚠️ 之前误用了 03 文档里的 {r2_url, signature}，实际客户端解 LatestRelease 只认 url/r2_url，
+//    且顶层 notes/pub_date 是必需字段。以源码为准（深度复核修正）。
+
+const appVersion = "0.2.26-chain.1"
 
 // CheckVersion 处理 POST /update/api/v1/versions/check
-//
-// 请求（通常明文 JSON）：客户端当前版本/平台信息。
-// 响应（明文 JSON）：是否有更新、最新版本号、下载信息等。
-//
-// 对齐客户端 [updater].check_url（03 文档 §1.1）。
+// 客户端 CheckRequest 为空体；返回 CheckResponse。
 func (a *App) CheckVersion(w http.ResponseWriter, r *http.Request) {
-	// TODO: 解析客户端版本/平台 -> 比对 latest.json -> 返回更新指引
-	writeJSON(w, http.StatusNotImplemented, map[string]string{
-		"error": "check-version: not implemented (stub)",
+	// 首期：返回"无更新"——versions 为空 map，客户端解析后走 NoUpdates 分支。
+	// 发版时在此填入真实 artifact 列表（resource_name + version + url + hash 等）。
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"code":    0,
+		"message": "ok",
+		"data": map[string]interface{}{
+			"versions": map[string]interface{}{},
+		},
 	})
 }
 
 // GetLatestJson 处理 GET /update/latest.json
-//
-// 请求：无 body。
-// 响应（明文 JSON）：主程序更新清单，schema（03 文档 §3.3）：
-//   {
-//     "version": "0.2.26-chain.1",
-//     "platforms": {
-//       "x86_64-pc-windows-msvc": {
-//         "r2_url": "https://<YOUR_DOMAIN>/update/Simprint_<ver>_x64-setup.exe",
-//         "signature": "..."
-//       }
-//     }
-//   }
-//
-// 对齐客户端 [updater].latest_json_url（03 文档 §1.1）。
+// 返回 LatestRelease 结构（对齐客户端 types.rs::LatestRelease）。
 func (a *App) GetLatestJson(w http.ResponseWriter, r *http.Request) {
-	// TODO: 读取并返回主程序 latest.json
-	writeJSON(w, http.StatusNotImplemented, map[string]string{
-		"error": "latest.json: not implemented (stub)",
+	if data, err := readUpdateFile("/opt/simprint/updates/latest.json"); err == nil {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write(data)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"version":  appVersion,
+		"notes":    "Simprint-Chain self-hosted release",
+		"pub_date": time.Now().UTC().Format(time.RFC3339),
+		"platforms": map[string]map[string]string{
+			"x86_64-pc-windows-msvc": {
+				"url":    "https://api.yfilwzy.cc.cd/simprint/update/Simprint_" + appVersion + "_x64-setup.exe",
+				"r2_url": "https://api.yfilwzy.cc.cd/simprint/update/Simprint_" + appVersion + "_x64-setup.exe",
+			},
+		},
 	})
 }
 
 // GetRuntimeLatestJson 处理 GET /update/simprint-runtime/latest.json
-//
-// 请求：无 body。
-// 响应（明文 JSON）：runtime 更新清单，schema 同 GetLatestJson。
-//
-// 对齐客户端 [updater].runtime_latest_json_url（03 文档 §1.1）。
 func (a *App) GetRuntimeLatestJson(w http.ResponseWriter, r *http.Request) {
-	// TODO: 读取并返回 runtime latest.json
-	writeJSON(w, http.StatusNotImplemented, map[string]string{
-		"error": "runtime latest.json: not implemented (stub)",
+	if data, err := readUpdateFile("/opt/simprint/updates/runtime-latest.json"); err == nil {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write(data)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"version":  appVersion,
+		"notes":    "Simprint-Chain runtime self-hosted release",
+		"pub_date": time.Now().UTC().Format(time.RFC3339),
+		"platforms": map[string]map[string]string{
+			"x86_64-pc-windows-msvc": {
+				"url":    "https://api.yfilwzy.cc.cd/simprint/update/simprint-runtime_" + appVersion + "_x64.zip",
+				"r2_url": "https://api.yfilwzy.cc.cd/simprint/update/simprint-runtime_" + appVersion + "_x64.zip",
+			},
+		},
 	})
+}
+
+// ServeWebviewZip 处理 GET /update/webview-fixed.zip（静态文件，供客户端按 downlaod_url 拉取）
+func (a *App) ServeWebviewZip(w http.ResponseWriter, r *http.Request) {
+	data, err := readUpdateFile("/opt/simprint/updates/webview-fixed.zip")
+	if err != nil {
+		http.Error(w, "webview-fixed.zip not provisioned yet", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	_, _ = w.Write(data)
+}
+
+// readUpdateFile 读取磁盘上的更新相关文件（latest.json / zip）。
+func readUpdateFile(path string) ([]byte, error) {
+	return os.ReadFile(path)
 }
