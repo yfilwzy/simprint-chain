@@ -2,6 +2,7 @@ pub mod bridge;
 pub mod config;
 pub mod error;
 pub mod manager;
+pub mod registry;
 pub mod server;
 pub mod tools;
 

@@ -5,7 +5,7 @@ use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// 获取tary 图标
 pub fn get_icon() -> Result<Image<'static>, tauri::Error> {
@@ -22,7 +22,13 @@ pub fn tooltip_text(app: &App) -> String {
 pub fn menu(app: &mut App) -> Result<TrayIcon, tauri::Error> {
     let quit_i = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let show_i = MenuItem::with_id(app, "show", "显示", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+    let settings_i = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+    let check_update_i = MenuItem::with_id(app, "check_update", "检查更新", true, None::<&str>)?;
+    let about_i = MenuItem::with_id(app, "about", "关于", true, None::<&str>)?;
+    let menu = Menu::with_items(
+        app,
+        &[&show_i, &settings_i, &check_update_i, &about_i, &quit_i],
+    )?;
 
     let icon = get_icon()?;
 
@@ -58,6 +64,34 @@ pub fn menu_handler(app: &AppHandle, event: MenuEvent) {
                 } else {
                     // 应用未准备好，显示提示或忽略
                     println!("应用正在初始化中，请稍候...");
+                }
+            });
+        }
+        "settings" => {
+            let app_handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if is_app_ready() {
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                        let _ = window.emit("navigate", "system-settings");
+                    }
+                }
+            });
+        }
+        "check_update" => {
+            let app_handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if is_app_ready() {
+                    let _ = app_handle.emit("menu-check-update", ());
+                }
+            });
+        }
+        "about" => {
+            let app_handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if is_app_ready() {
+                    let _ = app_handle.emit("menu-about", ());
                 }
             });
         }
