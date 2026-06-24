@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -35,8 +36,9 @@ type App struct {
 	clientKeyCache *tokenKeyCache
 }
 
-// tokenKeyCache access_token -> 客户端公钥 PEM 的内存缓存。
+// tokenKeyCache access_token -> 客户端公钥 PEM 的内存缓存（并发安全）。
 type tokenKeyCache struct {
+	mu    sync.RWMutex
 	store map[string]string // token -> clientPublicKeyPEM
 }
 
@@ -45,12 +47,22 @@ func newTokenKeyCache() *tokenKeyCache {
 }
 
 func (c *tokenKeyCache) Set(token, pubKeyPEM string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.store[token] = pubKeyPEM
 }
 
 func (c *tokenKeyCache) Get(token string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	k, ok := c.store[token]
 	return k, ok
+}
+
+func (c *tokenKeyCache) Delete(token string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.store, token)
 }
 
 // ---- 通用响应辅助 ----
@@ -89,14 +101,20 @@ func (a *App) writeEncrypted(w http.ResponseWriter, payload interface{}, clientP
 	writeJSON(w, http.StatusOK, enc)
 }
 
-// readEncryptedBody 读取请求体并解析为 EncryptedBody。
+// maxEncryptedBodySize 限制加密请求体大小（防 OOM；正常加密载荷 < 1MB）。
+const maxEncryptedBodySize = 2 * 1024 * 1024 // 2MB
+
+// readEncryptedBody 读取请求体并解析为 EncryptedBody（带大小限制）。
 func readEncryptedBody(r *http.Request) (*EncryptedBody, error) {
-	raw, err := io.ReadAll(r.Body)
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxEncryptedBodySize+1))
 	if err != nil {
 		return nil, err
 	}
 	if len(raw) == 0 {
 		return nil, errors.New("empty body")
+	}
+	if len(raw) > maxEncryptedBodySize {
+		return nil, errors.New("body too large")
 	}
 	var body EncryptedBody
 	if err := json.Unmarshal(raw, &body); err != nil {
@@ -482,22 +500,23 @@ func (a *App) LocalApiProxy(w http.ResponseWriter, r *http.Request) {
 		resourceID = parts[1]
 	}
 
+	// NOTE: table 来自 resourceTables 白名单 map，绝无用户输入直接拼接，无 SQL 注入风险。
 	switch {
 	case method == "GET" && resourceID == "":
-		// list
+		// list：列出该用户的所有资源
 		rows, qerr := a.DB.QueryContext(r.Context(),
 			`SELECT id, name, config, created_at, updated_at FROM `+table+` WHERE user_id=$1 ORDER BY created_at DESC`, userID)
 		if qerr != nil {
 			rerr = qerr
 			break
 		}
-		defer rows.Close()
 		items := []map[string]interface{}{}
 		for rows.Next() {
 			var id, name string
 			var cfg interface{}
 			var created, updated time.Time
 			if err := rows.Scan(&id, &name, &cfg, &created, &updated); err != nil {
+				rows.Close()
 				rerr = err
 				break
 			}
@@ -505,9 +524,11 @@ func (a *App) LocalApiProxy(w http.ResponseWriter, r *http.Request) {
 				"id": id, "name": name, "config": cfg, "created_at": created, "updated_at": updated,
 			})
 		}
+		rows.Close()
 		result = map[string]interface{}{"items": items, "total": len(items)}
 
 	case method == "GET" && resourceID != "":
+		// get：取单个资源
 		var name string
 		var cfg interface{}
 		var created, updated time.Time
@@ -526,7 +547,8 @@ func (a *App) LocalApiProxy(w http.ResponseWriter, r *http.Request) {
 			"id": resourceID, "name": name, "config": cfg, "created_at": created, "updated_at": updated,
 		}
 
-	case method == "POST" || method == "PUT":
+	case method == "POST":
+		// create：新建资源
 		name := asString(m, "name")
 		cfgJSON, _ := json.Marshal(m["config"])
 		var newID string
@@ -539,7 +561,26 @@ func (a *App) LocalApiProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		result = map[string]interface{}{"id": newID, "success": true}
 
+	case method == "PUT" && resourceID != "":
+		// update：更新已有资源（UPSERT 语义）
+		name := asString(m, "name")
+		cfgJSON, _ := json.Marshal(m["config"])
+		var updatedID string
+		err = a.DB.QueryRowContext(r.Context(),
+			`UPDATE `+table+` SET name=$1, config=$2 WHERE id=$3 AND user_id=$4 RETURNING id`,
+			name, cfgJSON, resourceID, userID).Scan(&updatedID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+				return
+			}
+			rerr = err
+			break
+		}
+		result = map[string]interface{}{"id": updatedID, "success": true}
+
 	case method == "DELETE" && resourceID != "":
+		// delete：删除资源（带 user_id 二次校验防越权）
 		_, err = a.DB.ExecContext(r.Context(),
 			`DELETE FROM `+table+` WHERE id=$1 AND user_id=$2`, resourceID, userID)
 		if err != nil {
