@@ -55,25 +55,24 @@ ssh simprint-server "docker logs --tail 50 simprint-server"
 
 ---
 
-## Task 2：官方 v0.2.26 源码合并 ⏳（大型，可拆分并行）
+## Task 2：官方 v0.2.26 源码合并 ✅（已完成，merge/v0.2.26 分支）
 
 **上下文**：本地基线约 v0.2.9 前，官方已到 v0.2.26（49 commits/160 文件）。需融合，同时保留 proxy_chain。
 **依赖**：Task 1（联调通过后再大改，避免在未验证基础上合并）
 
-**可并行子任务**（无文件冲突）：
-- **2A updater 合并**：采纳官方 `infrastructure/updater/` 分层，移植本地 URL 配置差异。冲突点：`src/bin/updater.rs` 路径相同。
-- **2B proxy_chain 保留**：本地 `services/proxy_chain/`（8 文件）整目录移植为独立模块，前端 proxy-center 加 Tab 分层。
-- **2C 官方新功能同步**：browser-extensions(v0.2.14)、mihomo(v0.2.22)、RPA(v0.2.24/25)、display-id(v0.2.26)。
-- **2D 前端整合**：create-window-proxy-drawer 三选一（remote/mihomo-local/chain）。
+**执行结果**（2026-06-25）：
+- fetch upstream（v0.2.26 tag），创建独立分支 `merge/v0.2.26`
+- 合并产生 **92 个 add/add 冲突**（不相关历史），按策略批量消解：
+  - `plugins/` 前端（~50个）采纳 upstream（官方 v0.2.26 演进版）
+  - `proxy-center` 保留本地（proxy_chain 前端面板）
+  - `src-tauri/src/mcp/` 保留本地（Task 3 registry/catalog 成果）
+  - `services/infrastructure/根文件` 保留本地（魔改+AGPL合规+config卫生）
+- **冲突 0 剩余，cargo check 零错误通过**
+- 官方新功能进入：browser-extensions(v0.2.14)、mihomo(v0.2.22)、RPA(v0.2.24/25)
+- 本地魔改保留：proxy_chain、registry/catalog、AGPL 文件
+- 分支推送 GitHub：`merge/v0.2.26`（69 文件变更/8540 增/2731 删）
 
-**步骤**（详见 01/02 文档）：
-1. `git remote add upstream https://github.com/Simprint/simprint.git && git fetch upstream`
-2. `git checkout -b merge/v0.2.26 upstream/main`
-3. 2A-2D 子任务分别 cherry-pick / 手动移植
-4. `cargo check && pnpm lint`
-
-**验收**：`cargo check` 通过 + proxy_chain 冒烟 + 官方新功能冒烟。
-**并行性**：2A/2B/2C/2D 可并行（无共享写文件），2D 依赖 2B/2C 完成。
+**后续**：联调通过后，可将 `merge/v0.2.26` 合并回 `main`。前端需 `pnpm install` 同步官方新依赖。
 
 ---
 
