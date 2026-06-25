@@ -35,6 +35,11 @@ src-tauri/config.development.toml
 src-tauri/config.production.toml
 src-tauri/config.test.toml
 
+# 二进制资源（由构建脚本或用户自行获取，不入 git）
+src-tauri/resources/mihomo.exe
+src-tauri/resources/simprint-runtime.exe
+src-tauri/resources/WebView2Loader.dll
+
 # packages
 packages
 

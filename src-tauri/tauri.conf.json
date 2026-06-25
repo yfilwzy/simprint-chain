@@ -21,7 +21,8 @@
     "targets": "nsis",
     "resources": {
       "resources/simprint-runtime.exe": "simprint-runtime.exe",
-      "resources/WebView2Loader.dll": "WebView2Loader.dll"
+      "resources/WebView2Loader.dll": "WebView2Loader.dll",
+      "resources/mihomo.exe": "mihomo.exe"
     },
     "icon": [
       "icons/32x32.png",
