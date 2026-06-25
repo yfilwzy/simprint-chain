@@ -10,7 +10,7 @@ mod redact;
 mod service;
 mod storage;
 mod subscription;
-mod types;
+pub mod types;
 
 pub use service::ProxyChainService;
 pub use types::{

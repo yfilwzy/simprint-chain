@@ -164,6 +164,41 @@ impl LocalStore {
         Ok(uuid)
     }
 
+    /// 批量创建环境（单事务，原子性：任一失败则全部回滚）。
+    pub fn batch_create_environments(
+        &self,
+        items: &[(String, Value, Option<String>, Option<String>)],
+    ) -> Result<Vec<String>, String> {
+        let mut conn = self.conn.lock().map_err(|e| e.to_string())?;
+        // 开启事务
+        conn.execute_batch("BEGIN;").map_err(|e| e.to_string())?;
+        let mut uuids = Vec::with_capacity(items.len());
+        let result = (|| -> Result<(), String> {
+            for (name, config, group_uuid, proxy_uuid) in items {
+                let uuid = Uuid::new_v4().to_string();
+                let config_str = serde_json::to_string(config).map_err(|e| e.to_string())?;
+                conn.execute(
+                    "INSERT INTO environments (uuid, name, config, group_uuid, proxy_uuid) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![uuid, name, config_str, group_uuid, proxy_uuid],
+                )
+                .map_err(|e| e.to_string())?;
+                uuids.push(uuid);
+            }
+            Ok(())
+        })();
+        // 根据结果提交或回滚
+        match result {
+            Ok(()) => {
+                conn.execute_batch("COMMIT;").map_err(|e| e.to_string())?;
+                Ok(uuids)
+            }
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK;");
+                Err(e)
+            }
+        }
+    }
+
     /// 列出环境（分页 + 可选关键字/分组过滤）
     pub fn list_environments(
         &self,

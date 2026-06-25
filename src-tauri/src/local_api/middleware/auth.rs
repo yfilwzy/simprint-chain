@@ -30,7 +30,7 @@ pub async fn auth_middleware(
         .into_response();
     };
 
-    // 校验 api_key 值与配置一致（破限版为 LOCAL_API_MOCK_KEY），防止任意字符串绕过鉴权
+    // 校验 api_key 值与配置一致（破限版首次启动随机生成持久化），防止任意字符串绕过鉴权
     if api_key != state.config.api_key {
         return LocalApiResponse::<()>::fail(
             Some("invalid api key"),

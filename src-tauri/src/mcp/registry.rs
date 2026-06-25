@@ -37,6 +37,10 @@ pub enum ToolCategory {
     EnvironmentExtras,
     /// 系统元工具（catalog/describe，借鉴 cli-hub-meta-skill 自描述发现）
     System,
+    /// 账号管理
+    Account,
+    /// RPA 自动化工作流
+    Rpa,
 }
 
 impl ToolCategory {
@@ -51,6 +55,8 @@ impl ToolCategory {
             Self::Group => "group",
             Self::EnvironmentExtras => "environment_extras",
             Self::System => "system",
+            Self::Account => "account",
+            Self::Rpa => "rpa",
         }
     }
 }

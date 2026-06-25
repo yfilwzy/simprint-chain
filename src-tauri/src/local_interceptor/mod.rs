@@ -17,12 +17,48 @@ use store::LocalStore;
 /// 全局本地存储单例
 static STORE: OnceLock<LocalStore> = OnceLock::new();
 
-/// 破限版本地 API 伪造密钥。
+/// 破限版本地 API 密钥（首次启动随机生成，持久化到用户目录）。
 ///
-/// MCP server 启动时用此 key 作为连接 Local API server 的凭证；
-/// Local API server 的 auth 中间件也用此 key 校验请求。
-/// 三处（local_interceptor mock / mcp manager / local_api auth）必须一致。
-pub const LOCAL_API_MOCK_KEY: &str = "simprint-local-mock-key-v1";
+/// 安全设计：不使用编译期硬编码常量（等同无鉴权），改为首次启动生成随机密钥
+/// 持久化到 `<config_dir>/local_api_key.txt`，后续每次启动读取同一密钥。
+/// MCP server 启动、Local API server auth、拦截器 mock 三处共用此密钥。
+static LOCAL_API_KEY: OnceLock<String> = OnceLock::new();
+
+/// 获取本地 API 密钥（惰性初始化：首次生成随机密钥并持久化）。
+pub fn local_api_key() -> &'static str {
+    LOCAL_API_KEY.get_or_init(|| {
+        match load_or_generate_api_key() {
+            Ok(key) => key,
+            Err(e) => {
+                log::error!("[LocalInterceptor] 加载/生成 API key 失败，降级用默认值: {}", e);
+                "simprint-local-fallback-key".to_string()
+            }
+        }
+    })
+}
+
+/// 从配置目录加载 API key，不存在则生成随机 key 并持久化。
+fn load_or_generate_api_key() -> std::result::Result<String, Box<dyn std::error::Error>> {
+    let config_dir = crate::core::paths::PathManager::get_config_dir()?;
+    let key_file = config_dir.join("local_api_key.txt");
+
+    if key_file.exists() {
+        let key = std::fs::read_to_string(&key_file)?;
+        let trimmed = key.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    // 生成随机密钥（32 字节 hex）
+    let random_key = format!("sk-{}", uuid::Uuid::new_v4().simple());
+    if let Some(parent) = key_file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&key_file, &random_key)?;
+    log::info!("[LocalInterceptor] 已生成新的本地 API 密钥并持久化到 {}", key_file.display());
+    Ok(random_key)
+}
 
 fn store() -> &'static LocalStore {
     STORE.get_or_init(|| {
@@ -232,7 +268,7 @@ fn mock_local_api_reset_key() -> std::result::Result<JsonRespnse, String> {
 fn local_api_config_json(enabled: bool) -> Value {
     json!({
         "enabled": enabled,
-        "apiKey": LOCAL_API_MOCK_KEY,
+        "apiKey": local_api_key(),
         "port": 37111,
         "remoteAccess": false,
         "corsOrigins": [],
@@ -302,7 +338,9 @@ fn handle_batch_create(payload: &Value) -> std::result::Result<JsonRespnse, Stri
         return err("批量创建环境列表为空");
     }
 
-    let mut results = Vec::with_capacity(environments.len());
+    // 收集所有环境数据（先校验，再单事务批量插入，保证原子性）
+    let mut items = Vec::with_capacity(environments.len());
+    let mut names = Vec::with_capacity(environments.len());
     for env_config in &environments {
         let name = env_config
             .get("name")
@@ -317,18 +355,21 @@ fn handle_batch_create(payload: &Value) -> std::result::Result<JsonRespnse, Stri
             .get("proxy_uuid")
             .and_then(|v| v.as_str())
             .map(String::from);
-
-        let uuid = store().create_environment(&name, env_config, group_uuid, proxy_uuid)?;
-
-        results.push(json!({
-            "uuid": uuid,
-            "name": name,
-            "success": true
-        }));
+        items.push((name.clone(), env_config.clone(), group_uuid, proxy_uuid));
+        names.push(name);
     }
 
+    // 单事务批量创建（任一失败全部回滚）
+    let uuids = store().batch_create_environments(&items)?;
+
+    let results: Vec<Value> = uuids
+        .iter()
+        .zip(names.iter())
+        .map(|(uuid, name)| json!({ "uuid": uuid, "name": name, "success": true }))
+        .collect();
+
     log::info!(
-        "[LocalInterceptor] 批量创建 {} 个环境成功",
+        "[LocalInterceptor] 批量创建 {} 个环境成功（单事务）",
         results.len()
     );
     ok(json!({ "data": results }))
