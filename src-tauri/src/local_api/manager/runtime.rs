@@ -26,13 +26,9 @@ impl LocalApiManager {
 
     pub async fn refresh_from_server(self: &Arc<Self>) -> Result<()> {
         let ctx = AppContext::get();
-        let response = match ctx.main_server_client.post("local-api/get", &json!({})).await {
-            Ok(response) => response,
-            Err(error) => {
-                log::warn!("failed to fetch local api config: {}", error);
-                return Ok(());
-            }
-        };
+        // 破限本地版：post 已接入全局拦截器，local-api/get 会命中本地 mock 返回有效配置。
+        // 若仍未命中（端点未覆盖），返回明确错误而非静默吞错，便于排障。
+        let response = ctx.main_server_client.post("local-api/get", &json!({})).await?;
 
         let config = response
             .data

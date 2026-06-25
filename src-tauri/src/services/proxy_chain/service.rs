@@ -162,8 +162,29 @@ impl ProxyChainService {
             .any(|subscription| subscription.enabled && subscription.nodes.is_empty());
 
         if refresh_needed {
-            let _ = Self::update_all_subscriptions().await?;
+            // 刷新订阅（单个订阅失败不阻断，错误写入其 last_error 字段）
+            let _ = Self::update_all_subscriptions().await;
             config = storage::load_config().await?;
+
+            // 刷新后若仍有启用的订阅节点为空，收集错误信息便于排障
+            let failed: Vec<String> = config
+                .subscriptions
+                .iter()
+                .filter(|s| s.enabled && s.nodes.is_empty())
+                .map(|s| {
+                    format!(
+                        "订阅「{}」{}",
+                        s.name,
+                        s.last_error.as_deref().unwrap_or("无可用节点")
+                    )
+                })
+                .collect();
+            if !failed.is_empty() {
+                log::warn!(
+                    "[ProxyChain] 部分订阅刷新失败：\n{}",
+                    failed.join("\n")
+                );
+            }
         }
 
         Ok(config)
