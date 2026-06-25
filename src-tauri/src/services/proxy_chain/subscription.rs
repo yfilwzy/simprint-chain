@@ -44,17 +44,43 @@ async fn fetch_subscription_body(subscription: &ProxySubscription) -> Result<Str
         return Err(Error::InvalidArgument.log_with("订阅 URL 为空或已脱敏"));
     }
 
-    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).build()?;
-    let mut request = client.get(subscription.url.trim());
-    if let Some(user_agent) = subscription.user_agent.as_deref() {
-        if !user_agent.trim().is_empty() {
-            request = request.header(reqwest::header::USER_AGENT, user_agent.trim());
-        }
-    }
+    // 健壮性：限制重定向次数（防止死循环）、设默认 UA（很多机场默认 UA 才返回 yaml）
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()?;
 
-    let response = request.send().await?;
+    // 默认 UA：优先用订阅配置的 user_agent，否则用 clash-verge（机场普遍兼容）
+    let default_ua = "clash-verge/v1.0";
+    let ua = subscription
+        .user_agent
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(default_ua);
+
+    let response = client
+        .get(subscription.url.trim())
+        .header(reqwest::header::USER_AGENT, ua)
+        .send()
+        .await
+        .map_err(|e| {
+            // 区分错误类型给出可读中文
+            if e.is_redirect() {
+                Error::NetworkRequestFailed
+                    .log_with(format!("订阅地址重定向过多（疑似失效或被墙）：{e}"))
+            } else if e.is_timeout() {
+                Error::NetworkTimeout.log_with(format!("订阅请求超时：{e}"))
+            } else if e.is_connect() {
+                Error::NetworkRequestFailed.log_with(format!("无法连接订阅服务器：{e}"))
+            } else {
+                Error::NetworkRequestFailed.log_with(format!("订阅请求失败：{e}"))
+            }
+        })?;
+
     if !response.status().is_success() {
-        return Err(format!("订阅请求失败: HTTP {}", response.status()).into());
+        return Err(Error::NetworkRequestFailed
+            .log_with(format!("订阅请求失败: HTTP {}", response.status())));
     }
 
     response.text().await.map_err(Into::into)

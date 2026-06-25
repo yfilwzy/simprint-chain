@@ -293,11 +293,23 @@ export function ProxyChainPanel() {
               <div className="rounded-md border border-border p-3 text-xs text-muted-foreground">
                 <div className="font-medium text-foreground mb-2">已保存订阅（脱敏展示）</div>
                 {selected.subscriptions_count ? `${selected.subscriptions_count} 个订阅已保存。更新时如不填写订阅 URL，会保持现有凭据。` : '暂无订阅'}
+                <div className="mt-1 text-[11px]">
+                  提示：若启动失败，请先点「同步订阅」拉取节点。订阅地址失效或被墙时节点为空，代理链无法启动。
+                </div>
               </div>
             )}
             <div className="flex flex-wrap gap-2">
               <Button size="sm" onClick={save} disabled={busy}><Save className="h-3.5 w-3.5 mr-1.5" />保存</Button>
-              {selected && <Button size="sm" variant="outline" onClick={() => runAction(() => updateAllProxyChainSubscriptions(), '订阅同步完成')} disabled={busy}><RefreshCcw className="h-3.5 w-3.5 mr-1.5" />同步订阅</Button>}
+              {selected && <Button size="sm" variant="outline" onClick={() => runAction(async () => {
+                const results = await updateAllProxyChainSubscriptions();
+                const failed = results.filter((r) => r.error || r.parsed === 0);
+                if (failed.length > 0) {
+                  const detail = failed.map((r) => r.error || '无可用节点').join('; ');
+                  toast.error(`订阅同步完成，但 ${failed.length}/${results.length} 个订阅失败：${detail}`);
+                } else {
+                  toast.success(`订阅同步完成，共解析 ${results.reduce((s, r) => s + r.parsed, 0)} 个节点`);
+                }
+              }, '订阅同步完成')} disabled={busy}><RefreshCcw className="h-3.5 w-3.5 mr-1.5" />同步订阅</Button>}
               {selected && <Button size="sm" variant="outline" onClick={() => runAction(() => startProxyChain(selected.id), '链式代理已启动')} disabled={busy}><Play className="h-3.5 w-3.5 mr-1.5" />启动</Button>}
               {selected && <Button size="sm" variant="outline" onClick={() => runAction(() => stopProxyChain(selected.id), '链式代理已停止')} disabled={busy}><Square className="h-3.5 w-3.5 mr-1.5" />停止</Button>}
               {selected && <Button size="sm" variant="outline" onClick={() => measureAndStore(selected.id)} disabled={busy}><Gauge className="h-3.5 w-3.5 mr-1.5" />测速</Button>}

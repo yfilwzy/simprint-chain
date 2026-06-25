@@ -70,6 +70,11 @@ impl MainServerRequestClient {
     }
 
     /// 发起 POST 请求（带自动凭证刷新）
+    ///
+    /// 破限本地版：在发起远程请求前，先经过 `local_interceptor::try_intercept`。
+    /// 命中本地端点（环境/分组/标签/代理/local-api/audit 等）即短路返回本地数据，
+    /// 不再向远程 main server 发请求。这样 LocalApiManager、McpManager 等
+    /// 内部调用 main_server_client.post 的地方也自动本地化。
     pub async fn post<T>(
         &self,
         url: &str,
@@ -78,6 +83,11 @@ impl MainServerRequestClient {
     where
         T: serde::Serialize + std::fmt::Debug,
     {
+        // 本地拦截器优先：命中即返回，避免无谓的远程请求
+        let payload = serde_json::to_value(json).unwrap_or(serde_json::Value::Null);
+        if let Some(result) = crate::local_interceptor::try_intercept(url, Some(&payload)) {
+            return result.map_err(|e| anyhow::anyhow!(e));
+        }
         with_auto_retry!(self, post_no_retry, url, json)
     }
 
@@ -103,6 +113,11 @@ impl MainServerRequestClient {
     where
         T: serde::Serialize + std::fmt::Debug,
     {
+        // 破限本地版：本地拦截器优先（与 post 一致）
+        let payload = serde_json::to_value(json).unwrap_or(serde_json::Value::Null);
+        if let Some(result) = crate::local_interceptor::try_intercept(url, Some(&payload)) {
+            return result.map_err(|e| anyhow::anyhow!(e));
+        }
         match self.post_with_headers_no_retry(url, json, headers.clone()).await {
             Ok(resp) => Ok(resp),
             Err(e) if is_unauthorized_error(&e) => {

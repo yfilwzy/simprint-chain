@@ -17,6 +17,13 @@ use store::LocalStore;
 /// 全局本地存储单例
 static STORE: OnceLock<LocalStore> = OnceLock::new();
 
+/// 破限版本地 API 伪造密钥。
+///
+/// MCP server 启动时用此 key 作为连接 Local API server 的凭证；
+/// Local API server 的 auth 中间件也用此 key 校验请求。
+/// 三处（local_interceptor mock / mcp manager / local_api auth）必须一致。
+pub const LOCAL_API_MOCK_KEY: &str = "simprint-local-mock-key-v1";
+
 fn store() -> &'static LocalStore {
     STORE.get_or_init(|| {
         LocalStore::new().unwrap_or_else(|e| {
@@ -93,6 +100,10 @@ pub fn try_intercept(url: &str, data: Option<&Value>) -> Option<std::result::Res
         // ===== Local API 运行时配置（MCP / 本地 HTTP API 共用）=====
         // 破限版无远程服务，伪造一份有效配置，使 MCP server / Local API server 能正常拉起。
         "local-api/get" => mock_local_api_runtime_config(),
+        // 更新配置：按 payload 的 enabled 字段回显（前端开关 toggle 时调用）
+        "local-api/update" => mock_local_api_update(&payload),
+        // 重置 api_key：回显一个新 key
+        "local-api/reset-api-key" => mock_local_api_reset_key(),
 
         // ===== 审计日志（本地版无服务端日志，返回空数据避免页面报错）=====
         "audit/logs" => empty_audit_logs(),
@@ -190,15 +201,43 @@ fn mock_local_api_runtime_config() -> std::result::Result<JsonRespnse, String> {
     Ok(JsonRespnse {
         code: Some(1),
         message: Some("success".into()),
-        data: Some(json!({
-            "enabled": true,
-            "apiKey": "simprint-local-mock-key-v1",
-            "port": 37111,
-            "remoteAccess": false,
-            "corsOrigins": [],
-            "requestsToday": 0,
-            "dailyLimit": 999999
-        })),
+        data: Some(local_api_config_json(true)),
+    })
+}
+
+/// 处理 `local-api/update`：按 payload 的 enabled 字段回显更新后的配置。
+/// 前端开关 toggle 时会先调这个端点，必须返回成功否则开关弹回。
+fn mock_local_api_update(payload: &Value) -> std::result::Result<JsonRespnse, String> {
+    let enabled = payload
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    Ok(JsonRespnse {
+        code: Some(1),
+        message: Some("success".into()),
+        data: Some(local_api_config_json(enabled)),
+    })
+}
+
+/// 处理 `local-api/reset-api-key`：回显一个新 key（破限版用固定值即可）。
+fn mock_local_api_reset_key() -> std::result::Result<JsonRespnse, String> {
+    Ok(JsonRespnse {
+        code: Some(1),
+        message: Some("success".into()),
+        data: Some(local_api_config_json(true)),
+    })
+}
+
+/// 构造 LocalApiRuntimeConfig 的 JSON（统一字段，供 get/update/reset 复用）。
+fn local_api_config_json(enabled: bool) -> Value {
+    json!({
+        "enabled": enabled,
+        "apiKey": LOCAL_API_MOCK_KEY,
+        "port": 37111,
+        "remoteAccess": false,
+        "corsOrigins": [],
+        "requestsToday": 0,
+        "dailyLimit": 999999
     })
 }
 
