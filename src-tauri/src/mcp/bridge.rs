@@ -1,6 +1,6 @@
 use axum::http::StatusCode;
 use serde::{Serialize, de::DeserializeOwned};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::{
     app::handle::get_app_handle,
@@ -236,6 +236,26 @@ impl LocalApiBridge {
 
     pub async fn list_workspaces(&self) -> Result<LocalApiWorkspaceListResponse, McpToolError> {
         self.proxy_main_server("workspaces/list", "workspaces.list", &json!({})).await
+    }
+
+    // ========================================================================
+    // 通用原始代理（accounts / rpa / extensions 等未定义 entity 类型的域）
+    // ========================================================================
+
+    /// 通用 Local API 代理：调用指定端点，返回原始 JSON。
+    ///
+    /// 用于 accounts/rpa/extensions 等域，避免为每个域定义 entity 类型。
+    pub async fn proxy_raw<P>(
+        &self,
+        server_path: &str,
+        permission_code: &str,
+        payload: &P,
+    ) -> Result<Value, McpToolError>
+    where
+        P: Serialize + ?Sized,
+    {
+        self.proxy_main_server::<Value, P>(server_path, permission_code, payload)
+            .await
     }
 
     pub async fn get_workspace(

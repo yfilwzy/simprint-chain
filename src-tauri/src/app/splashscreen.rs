@@ -129,6 +129,30 @@ pub fn init_startup(app_handle: AppHandle) {
             log::error!("Failed to create main window: {}", e);
         }
 
+        // 破限本地版：自动启用 Local API + MCP server（开箱即用，无需手动开开关）
+        {
+            let app_for_auto = app_handle_clone.clone();
+            tokio::task::spawn(async move {
+                let ctx = crate::app::context::AppContext::get();
+                // 自动启用 Local API
+                if let Err(e) = ctx.local_api_manager.refresh_from_server().await {
+                    log::warn!("[AutoStart] Local API server 启动失败: {}", e);
+                }
+                // 自动启用 MCP（写 enabled=true 配置再启动）
+                use crate::infrastructure::persistence::tauri_store::{get_store_key, set_store_key, keys};
+                let mcp_enabled = get_store_key(&app_for_auto, keys::MCP)
+                    .and_then(|v| v.get("enabled").and_then(|e| e.as_bool()))
+                    .unwrap_or(false);
+                if !mcp_enabled {
+                    let _ = set_store_key(&app_for_auto, keys::MCP, serde_json::json!({"enabled": true}));
+                }
+                if let Err(e) = ctx.mcp_manager.start(&app_for_auto).await {
+                    log::warn!("[AutoStart] MCP server 启动失败: {}", e);
+                }
+                log::info!("[AutoStart] Local API + MCP server 已自动启用");
+            });
+        }
+
         // 步骤5: 准备就绪
         emit_progress(&app_handle_clone, 100, "准备就绪", Some("ready"));
         tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;

@@ -27,22 +27,38 @@ pub fn resolve_profiles_base(
     crate::core::paths::PathManager::get_profiles_dir(app).map_err(Into::into)
 }
 
-/// 将 zip 解压到目标目录
+/// 将 zip 解压到目标目录（含 Zip-Slip 路径遍历防护）
 pub fn extract_zip_to_dir(zip_path: &Path, target_dir: &Path) -> Result<()> {
     let file = fs::File::open(zip_path)?;
     let mut archive = zip::ZipArchive::new(io::BufReader::new(file))?;
+
+    // 预先规范化目标目录，用于后续边界校验（防 Zip-Slip）
+    fs::create_dir_all(target_dir)?;
+    let canonical_target = target_dir.canonicalize()?;
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
         let name = entry.name().to_string();
         let out_path = target_dir.join(&name);
 
-        if name.ends_with('/') || entry.is_dir() {
-            fs::create_dir_all(&out_path)?;
+        // Zip-Slip 防护：校验解压路径规范化后仍在 target_dir 内
+        // 先确保父目录存在，再 canonicalize（对尚不存在的文件用 parent 规范化）
+        let check_path = if name.ends_with('/') || entry.is_dir() {
+            out_path.clone()
         } else {
-            if let Some(parent) = out_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
+            out_path.parent().unwrap_or(target_dir).to_path_buf()
+        };
+        fs::create_dir_all(&check_path)?;
+        let canonical_check = check_path.canonicalize().unwrap_or_else(|_| canonical_target.clone());
+        if !canonical_check.starts_with(&canonical_target) {
+            return Err(crate::core::error::Error::IntegrityCheckFailed.log_with(
+                format!("Zip-Slip 安全拦截：条目「{}」试图写到目标目录之外，已拒绝", name),
+            ));
+        }
+
+        if name.ends_with('/') || entry.is_dir() {
+            // 目录已由上面创建
+        } else {
             let mut out_file = fs::File::create(&out_path)?;
             std::io::copy(&mut entry, &mut out_file)?;
         }

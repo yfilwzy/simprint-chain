@@ -31,7 +31,7 @@ impl McpManager {
 
     pub async fn start(self: &Arc<Self>, app: &tauri::AppHandle) -> Result<(), String> {
         let config = load_config(app)?;
-        self.start_with_config(config).await
+        self.start_with_config(config, app.clone()).await
     }
 
     pub async fn reload(self: &Arc<Self>, app: &tauri::AppHandle) -> Result<(), String> {
@@ -41,7 +41,7 @@ impl McpManager {
             return Ok(());
         }
 
-        self.start_with_config(config).await
+        self.start_with_config(config, app.clone()).await
     }
 
     pub async fn stop(&self) {
@@ -65,7 +65,7 @@ impl McpManager {
         McpManagerStatus { running: false }
     }
 
-    async fn start_with_config(&self, config: McpConfig) -> Result<(), String> {
+    async fn start_with_config(&self, config: McpConfig, app_handle: tauri::AppHandle) -> Result<(), String> {
         if !config.enabled {
             return Err("请先启用 MCP 服务开关".to_string());
         }
@@ -84,7 +84,7 @@ impl McpManager {
 
         self.stop().await;
 
-        let handle = crate::mcp::server::spawn_mcp_server(server_config.clone())
+        let handle = crate::mcp::server::spawn_mcp_server(server_config.clone(), app_handle)
             .map_err(|error| error.to_string())?;
         if let Err(error) = wait_for_mcp_server_ready(&health_url).await {
             handle.shutdown().await;

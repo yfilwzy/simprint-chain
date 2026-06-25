@@ -133,6 +133,29 @@ export function ProxyChainPanel() {
       toast.error('请至少填写一个机场订阅，每行格式：名称|订阅URL');
       return;
     }
+    // 落地链模式校验端口范围（直连模式不需要落地）
+    if (form.mode === 'landing_chain') {
+      const portNum = Number(form.landingPort);
+      if (!form.landingHost.trim()) {
+        toast.error('落地链模式必须填写落地 SOCKS5 Host');
+        return;
+      }
+      if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+        toast.error('落地端口必须是 1-65535 的整数');
+        return;
+      }
+      // 校验订阅 URL 格式
+      for (const sub of subscriptions) {
+        if (sub.url) {
+          try {
+            new URL(sub.url);
+          } catch {
+            toast.error(`订阅「${sub.name}」的 URL 格式无效`);
+            return;
+          }
+        }
+      }
+    }
     setBusy(true);
     try {
       await upsertProxyChain({
@@ -319,7 +342,11 @@ export function ProxyChainPanel() {
                 if (!result.success) throw new Error(result.error || '链路测试失败');
                 toast.success(`出口 IP：${result.ip || '未知'} ${result.country || ''} ${result.city || ''}`);
               }, '链路测试完成')} disabled={busy}><Activity className="h-3.5 w-3.5 mr-1.5" />出口检测</Button>}
-              {selected && <Button size="sm" variant="destructive" onClick={() => runAction(() => deleteProxyChain(selected.id), '已删除链式代理')} disabled={busy}><Trash2 className="h-3.5 w-3.5 mr-1.5" />删除</Button>}
+              {selected && <Button size="sm" variant="destructive" onClick={() => {
+                if (window.confirm('确认删除当前代理链？此操作将清空所有订阅、落地代理配置，且不可恢复。')) {
+                  runAction(() => deleteProxyChain(selected.id), '已删除链式代理');
+                }
+              }} disabled={busy}><Trash2 className="h-3.5 w-3.5 mr-1.5" />删除</Button>}
             </div>
           </CardContent>
         </Card>

@@ -45,36 +45,55 @@ static REFRESH_LOCK: Lazy<Arc<Mutex<()>>> = Lazy::new(|| Arc::new(Mutex::new(())
 
 // ============ 凭证管理函数 ============
 
+/// 安全读取 CREDENTIAL 锁（poisoned 时降级返回默认凭证，避免 panic 致全应用崩溃）。
+fn read_credential() -> Credential {
+    CREDENTIAL
+        .read()
+        .unwrap_or_else(|poisoned| {
+            log::error!("[Credential] 读锁 poisoned，降级返回默认凭证: {}", poisoned);
+            poisoned.into_inner()
+        })
+        .clone()
+}
+
+/// 安全写入 CREDENTIAL 锁（poisoned 时仍获取内部引用，避免 panic）。
+fn write_credential() -> std::sync::RwLockWriteGuard<'static, Credential> {
+    CREDENTIAL.write().unwrap_or_else(|poisoned| {
+        log::error!("[Credential] 写锁 poisoned，强制恢复: {}", poisoned);
+        poisoned.into_inner()
+    })
+}
+
 /// 获取凭证
 pub fn get_credential() -> Credential {
-    CREDENTIAL.read().unwrap().clone()
+    read_credential()
 }
 
 /// 设置访问令牌
 pub fn set_access_token(token: String) {
-    CREDENTIAL.write().unwrap().access_token = Some(token);
+    write_credential().access_token = Some(token);
 }
 
 /// 设置刷新令牌
 pub fn set_refresh_token(token: String) {
-    CREDENTIAL.write().unwrap().refresh_token = Some(token);
+    write_credential().refresh_token = Some(token);
 }
 
 /// 设置完整凭证
 pub fn set_credential(access_token: String, refresh_token: String) {
-    let mut cred = CREDENTIAL.write().unwrap();
+    let mut cred = write_credential();
     cred.access_token = Some(access_token);
     cred.refresh_token = Some(refresh_token);
 }
 
 /// 清除凭证（登出）
 pub fn clear_credential() {
-    CREDENTIAL.write().unwrap().reset_token();
+    write_credential().reset_token();
 }
 
 /// 是否已登录
 pub fn is_login() -> bool {
-    CREDENTIAL.read().unwrap().is_login()
+    read_credential().is_login()
 }
 
 // ============ 服务器公钥管理函数 ============
@@ -139,7 +158,7 @@ pub async fn fetch_server_public_key() -> Result<(), String> {
                         // 统一提取出纯 PEM 字符串后再校验。
                         let public_key = extract_public_key_from_body(&body);
                         if let Some(pk) = public_key.as_deref().filter(|pk| pk.contains("-----BEGIN RSA PUBLIC KEY-----")) {
-                            *SERVER_PUBLIC_KEY.write().unwrap() = Some(pk.to_string());
+                            *write_public_key_guard() = Some(pk.to_string());
                             return Ok(());
                         } else {
                             error!("服务器响应错误：公钥格式无效");
@@ -169,19 +188,37 @@ pub async fn init_server_public_key() -> Result<(), String> {
     fetch_server_public_key().await
 }
 
+/// 安全读取 SERVER_PUBLIC_KEY 锁（poisoned 降级）。
+fn read_public_key_guard() -> std::sync::RwLockReadGuard<'static, Option<String>> {
+    SERVER_PUBLIC_KEY.read().unwrap_or_else(|poisoned| {
+        log::error!("[Credential] 公钥读锁 poisoned，降级: {}", poisoned);
+        poisoned.into_inner()
+    })
+}
+
+/// 安全写入 SERVER_PUBLIC_KEY 锁（poisoned 仍恢复）。
+fn write_public_key_guard() -> std::sync::RwLockWriteGuard<'static, Option<String>> {
+    SERVER_PUBLIC_KEY.write().unwrap_or_else(|poisoned| {
+        log::error!("[Credential] 公钥写锁 poisoned，强制恢复: {}", poisoned);
+        poisoned.into_inner()
+    })
+}
+
 /// 获取服务器公钥（必须在初始化后调用）
 pub fn get_server_public_key() -> String {
-    SERVER_PUBLIC_KEY.read().unwrap().clone().expect("服务器配置未初始化")
+    read_public_key_guard()
+        .clone()
+        .expect("服务器配置未初始化")
 }
 
 /// 设置服务器公钥
 pub fn set_server_public_key(public_key: String) {
-    *SERVER_PUBLIC_KEY.write().unwrap() = Some(public_key);
+    *write_public_key_guard() = Some(public_key);
 }
 
 /// 清除服务器公钥
 pub fn clear_server_public_key() {
-    *SERVER_PUBLIC_KEY.write().unwrap() = None;
+    *write_public_key_guard() = None;
 }
 
 // ============ 凭证刷新函数 ============
