@@ -9,11 +9,16 @@
 //! 现有 `tools/` 目录的工具后续逐个适配 `McpTool` trait 后注册到 `ToolRegistry`，
 //! 最终 `server.rs::build_service` 改为从 `ToolRegistry::all_routes()` 取 routes。
 
+use std::pin::Pin;
+
 use rmcp::handler::server::router::tool::ToolRoute;
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::mcp::server::McpServer;
+
+/// 异步 invoke 的返回类型（Box 化 Future，保证 trait 是 object-safe）。
+pub type InvokeFuture =
+    Pin<Box<dyn Future<Output = Result<serde_json::Value, McpError>> + Send>>;
 
 /// 工具分类（借鉴 CLI-Anything category 矩阵）
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -38,7 +43,7 @@ pub enum ToolCategory {
 ///
 /// 每个工具在注册表中对应一个 `ToolEntry`，承载 name/display_name/description/category。
 /// description 采用 SKILL.md 风格的分层描述（概览 / 参数 / 示例 / 限制），提升 LLM 调用准确率。
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolEntry {
     /// 工具唯一标识，MCP 客户端据此调用
     pub name: String,
@@ -89,7 +94,11 @@ pub enum McpError {
 /// 每个工具实现此 trait 后注册到 `ToolRegistry`。
 /// 统一管线：参数解析 → 鉴权校验 → 执行 → 结果序列化 → 错误归一化。
 ///
-/// # 生命周期
+/// # object-safe 说明
+/// invoke 返回 `InvokeFuture`（Box 化 Future）而非 `impl Future`，
+/// 因此本 trait 是 object-safe 的，可以用 `Box<dyn McpTool>`。
+///
+/// # 生命周期（新增工具规范，借鉴 HARNESS.md SOP）
 /// 1. 识别能力：明确工具做什么、输入输出
 /// 2. 定义接口：实现 `meta()` 返回 `ToolEntry`
 /// 3. 实现适配层：实现 `invoke()`（走 LocalApiBridge）
@@ -100,11 +109,9 @@ pub trait McpTool: Send + Sync {
     fn meta(&self) -> &ToolEntry;
 
     /// 执行工具调用（统一管线：参数解析→鉴权→执行→序列化→错误归一化）
-    fn invoke(
-        &self,
-        ctx: &Session,
-        args: serde_json::Value,
-    ) -> impl std::future::Future<Output = Result<serde_json::Value, McpError>> + Send;
+    ///
+    /// 实现时用 `Box::pin(async move { ... })` 包装异步逻辑。
+    fn invoke(&self, ctx: &Session, args: serde_json::Value) -> InvokeFuture;
 }
 
 /// 工具注册表（借鉴 CLI-Anything registry 注册表）
@@ -184,7 +191,7 @@ impl Default for ToolRegistry {
 /// 后续逐个适配 `McpTool` trait 后在此函数注册。
 /// 元工具（list_tools_catalog / describe_tool）也在此注册。
 pub fn build_registry() -> ToolRegistry {
-    let mut reg = ToolRegistry::new();
+    let reg = ToolRegistry::new();
 
     // TODO: 注册现有 7 模块工具（适配 McpTool trait 后）
     // reg.register(Box::new(builtins::environments::ListEnvironmentsTool));
