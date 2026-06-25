@@ -41,6 +41,11 @@ pub async fn http_post(
     url: String,
     data: Option<Value>,
 ) -> std::result::Result<JsonRespnse, String> {
+    // 破限本地化：优先尝试本地拦截器处理（环境数据、配额等）
+    if let Some(result) = crate::local_interceptor::try_intercept(&url, data.as_ref()) {
+        return result;
+    }
+
     let ctx = AppContext::get();
     ctx.main_server_client.post(&url, &data).await.map_err(|e| e.to_string())
 }

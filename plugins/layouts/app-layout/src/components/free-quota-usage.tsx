@@ -49,7 +49,7 @@ export const FreeQuotaUsage: React.FC<FreeQuotaUsageProps> = ({ collapsed, curre
     }
   }, [collapsed, workspacesRefreshKey]);
 
-  const total = quota?.max_environments ?? 6;
+  const total = quota?.max_environments ?? 999999;
   const used = quota?.used_environments ?? 0;
   const percentage = total > 0 ? (used / total) * 100 : 0;
 

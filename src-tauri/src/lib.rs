@@ -3,6 +3,7 @@ pub mod core; // 核心模块（配置、错误、日志、工具）
 pub mod domain; // 领域层（业务模型）
 pub mod infrastructure; // 基础设施层（缓存、事件总线、网络、存储等）
 pub mod local_api; // 本地 API 子域
+pub mod local_interceptor; // 本地拦截器（破限本地化）
 pub mod mcp; // MCP 子域
 pub mod services; // 服务层（业务逻辑）
 

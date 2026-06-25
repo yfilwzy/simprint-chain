@@ -17,6 +17,9 @@ mod crypto;
 // =============================================================================
 
 fn main() {
+    // 0. 同步 WebView2Loader.dll 到 resources（wry/webview2-com 运行时必需，缺失会导致程序启动崩溃）
+    webview2_loader::sync_webview2_loader_dll();
+
     // 1. 准备 simprint-runtime 资源
     runtime_assets::ensure_simprint_runtime_downloaded();
 
@@ -487,5 +490,182 @@ mod tauri_build_pipeline {
         {
             tauri_build::build();
         }
+    }
+}
+
+// =============================================================================
+// 模块六：WebView2Loader.dll 同步
+// =============================================================================
+// WebView2Loader.dll 是 webview2-com-sys crate 自带的 native 库（位于 crate 源码的
+// x64/ 目录下）。该 DLL 必须随可执行文件一同分发，否则程序启动时因找不到 DLL 直接崩溃。
+// 此处在构建期从 webview2-com-sys crate 源码中自动同步最新版 DLL 到 resources/，
+// 保证 DLL 版本始终与当前编译使用的 webview2-com 版本一致，避免版本错配。
+mod webview2_loader {
+    use super::*;
+
+    const WEBVIEW2_LOADER_RESOURCE_PATH: &str = "resources/WebView2Loader.dll";
+
+    /// 将 webview2-com-sys crate 自带的 WebView2Loader.dll 同步到 resources 目录。
+    ///
+    /// 实现思路：Cargo 在编译依赖 crate 时会把 crate 源码解压到 `$CARGO_HOME/registry/src/`
+    /// 下。通过 `DEP_WEBVIEW2_*` 环境变量可以拿到 crate 的源码路径（webview2-com-sys 会
+    /// 通过 `links` 声明）。若拿不到（如依赖未编译），则尝试从 target 目录复制（构建产物），
+    /// 最终回退到保持 resources 中已有的 DLL 不变。
+    pub fn sync_webview2_loader_dll() {
+        println!("cargo:rerun-if-changed={}", WEBVIEW2_LOADER_RESOURCE_PATH);
+
+        let target_path = Path::new(WEBVIEW2_LOADER_RESOURCE_PATH);
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent).unwrap_or_else(|error| {
+                panic!(
+                    "[BUILD ERROR] Failed to create resources directory '{}': {}",
+                    parent.display(),
+                    error
+                );
+            });
+        }
+
+        // 优先从 webview2-com-sys crate 源码目录复制（版本最可靠）
+        if let Some(src_path) = locate_from_crate_source() {
+            match fs::copy(&src_path, target_path) {
+                Ok(_) => {
+                    println!(
+                        "cargo:warning=Synced WebView2Loader.dll from crate source: {}",
+                        src_path.display()
+                    );
+                    return;
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[BUILD WARNING] Failed to copy WebView2Loader.dll from '{}': {}",
+                        src_path.display(),
+                        error
+                    );
+                }
+            }
+        }
+
+        // 回退 1：从 target/release 复制（webview2-com-sys build.rs 的链接产物）
+        if let Some(src_path) = locate_from_target_dir() {
+            match fs::copy(&src_path, target_path) {
+                Ok(_) => {
+                    println!(
+                        "cargo:warning=Synced WebView2Loader.dll from target dir: {}",
+                        src_path.display()
+                    );
+                    return;
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[BUILD WARNING] Failed to copy WebView2Loader.dll from target '{}': {}",
+                        src_path.display(),
+                        error
+                    );
+                }
+            }
+        }
+
+        // 回退 2：resources 中已存在 DLL，保持不变
+        if target_path.exists() {
+            println!("cargo:warning=Using existing WebView2Loader.dll in resources/");
+            return;
+        }
+
+        // 全部失败： panic，避免产出缺少 DLL 的安装包
+        panic!(
+            "[BUILD ERROR] WebView2Loader.dll not found.\n\
+             Tried: webview2-com-sys crate source, target directory, and existing resources.\n\
+             This DLL is required at runtime; without it the app crashes on startup."
+        );
+    }
+
+    /// 从 webview2-com-sys crate 源码目录定位 WebView2Loader.dll。
+    ///
+    /// Cargo 把依赖 crate 解压到 `$CARGO_HOME/registry/src/<index>/webview2-com-sys-<version>/`，
+    /// 其中 `x64/WebView2Loader.dll` 即所需文件。通过遍历 cargo registry 目录查找。
+    fn locate_from_crate_source() -> Option<PathBuf> {
+        // webview2-com-sys 通过 links="webview2_com" 声明，Cargo 会设置 DEP_WEBVIEW2_COM_* 变量
+        // 但这些变量只有部分字段；这里直接扫描 registry 目录，更可靠。
+        let cargo_home = env::var("CARGO_HOME")
+            .unwrap_or_else(|_| {
+                // 回退到默认 ~/.cargo
+                let home = env::var("USERPROFILE")
+                    .or_else(|_| env::var("HOME"))
+                    .unwrap_or_else(|_| ".".to_string());
+                format!("{}/.cargo", home)
+            });
+
+        let registry_src = Path::new(&cargo_home).join("registry/src");
+
+        if !registry_src.exists() {
+            return None;
+        }
+
+        // 扫描 registry/src 下的所有 index 目录
+        let mut best_match: Option<PathBuf> = None;
+
+        for entry in fs::read_dir(&registry_src).ok()?.flatten() {
+            let index_dir = entry.path();
+            // 在每个 index 目录下查找 webview2-com-sys-* 目录
+            if let Ok(crate_entries) = fs::read_dir(&index_dir) {
+                for crate_entry in crate_entries.flatten() {
+                    let crate_name = crate_entry.file_name();
+                    let crate_name_str = crate_name.to_string_lossy();
+                    if crate_name_str.starts_with("webview2-com-sys-") {
+                        // 根据 target_arch 选择子目录
+                        let arch_dir = if cfg!(target_arch = "x86_64") {
+                            "x64"
+                        } else if cfg!(target_arch = "x86") {
+                            "x86"
+                        } else if cfg!(target_arch = "aarch64") {
+                            "arm64"
+                        } else {
+                            continue;
+                        };
+
+                        let dll_path = crate_entry.path().join(arch_dir).join("WebView2Loader.dll");
+                        if dll_path.exists() {
+                            // 优先选择版本号最大的（语义版本排序）
+                            let current = best_match.as_ref().and_then(|p| {
+                                p.ancestors()
+                                    .nth(2)
+                                    .and_then(|a| a.file_name())
+                                    .map(|n| n.to_string_lossy().to_string())
+                            });
+                            let new_version = crate_name_str
+                                .strip_prefix("webview2-com-sys-")
+                                .unwrap_or(&crate_name_str);
+
+                            if current.is_none()
+                                || new_version > current.as_deref().unwrap_or("")
+                            {
+                                best_match = Some(dll_path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        best_match
+    }
+
+    /// 从 target/release 目录定位 WebView2Loader.dll（webview2-com-sys build.rs 的输出位置）。
+    fn locate_from_target_dir() -> Option<PathBuf> {
+        // target/release 下会有 DLL（cargo 在编译 webview2-com-sys 后，DLL 可能被复制到这里）
+        // 但实际 webview2-com-sys 把 DLL 放在 OUT_DIR，不会自动到 target/release。
+        // 这里检查 target/release 和 target/<triple>/release 两种可能。
+        let possible_paths = [
+            PathBuf::from("target/release/WebView2Loader.dll"),
+            PathBuf::from("target/x86_64-pc-windows-msvc/release/WebView2Loader.dll"),
+            PathBuf::from("../target/release/WebView2Loader.dll"),
+        ];
+
+        for path in &possible_paths {
+            if path.exists() {
+                return Some(path.clone());
+            }
+        }
+        None
     }
 }

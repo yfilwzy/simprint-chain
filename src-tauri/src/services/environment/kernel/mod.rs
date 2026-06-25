@@ -67,18 +67,38 @@ impl KernelService {
                 let _ = fs::remove_dir_all(&kernel_dir);
             } else {
                 // 校验 signature
-                let signature = kernel_detail
+                // 破限本地化：signature 为空时跳过校验（本地破解模式，允许使用任意来源内核）
+                let signature_opt = kernel_detail
                     .signature
                     .as_deref()
-                    .filter(|s| !s.trim().is_empty())
-                    .ok_or("该内核版本缺少 signature，无法校验核心 DLL")?;
+                    .filter(|s| !s.trim().is_empty());
+
+                if signature_opt.is_none() {
+                    // 破限模式：无 signature，跳过校验直接标记就绪
+                    crate::log_info!(
+                        crate::core::logger::modules::KERNEL,
+                        "破限模式：内核 {} 无 signature，跳过校验直接就绪",
+                        kernel_value
+                    );
+                    utils::emit_status(
+                        status_emitter.as_ref(),
+                        &env_uuid,
+                        &kernel_value,
+                        EnvironmentStatus::Ready,
+                        Some("就绪"),
+                        None,
+                        None,
+                        None,
+                    );
+                    return Ok(exe_path.to_string_lossy().to_string());
+                }
 
                 match verifier::verify_kernel(
                     &app,
                     &env_uuid,
                     &kernel_value,
                     &kernel_dir,
-                    signature,
+                    signature_opt.unwrap(),
                     status_emitter.clone(),
                 ) {
                     Ok(true) => {
