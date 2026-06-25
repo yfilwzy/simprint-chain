@@ -71,7 +71,7 @@ export function buildPortableRpaTask(detail: RpaTaskDetailDto): PortableRpaTaskD
       stop_on_error: detail.task.stop_on_error,
       notify_on_complete: detail.task.notify_on_complete,
       notify_on_error: detail.task.notify_on_error,
-      environment_uuids: detail.environment_uuids,
+      environment_uuids: [],
       steps: detail.steps.map((step) => ({
         uuid: step.uuid,
         step_type: step.step_type,

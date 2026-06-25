@@ -5,6 +5,7 @@ import AppTitlebar from './components/titlebar';
 import { AppBackground } from './components/app-background';
 import { DownloadEventSubscriber } from './components/download-event-subscriber';
 import { useMessagesStore } from './stores/messages-store';
+import { MihomoRuntimeSubscriber } from '../../../services/store/src';
 import './styles.css';
 import { extensionRegistry } from '@slotkitjs/core';
 import { appLayoutResources } from './i18n/resources';
@@ -19,6 +20,7 @@ const AppLayoutPlugin: React.FC = () => {
   return (
     <div className="relative flex flex-col h-screen w-full min-w-0 overflow-hidden">
       <DownloadEventSubscriber />
+      <MihomoRuntimeSubscriber />
       {/* 背景层 */}
       <AppBackground />
 

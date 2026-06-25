@@ -173,6 +173,8 @@ function ProxyCellContent({
 }) {
   if (environment.proxy) {
     const { proxy } = environment;
+    const flagCode = proxy.country_code || proxy.country;
+    const isLocalProxy = proxy.source === 'local';
     return (
       <Tooltip>
         <TooltipTrigger asChild>
@@ -180,25 +182,35 @@ function ProxyCellContent({
             onClick={onOpenProxyDialog}
             className="h-6 w-6 flex items-center justify-center rounded hover:bg-accent cursor-pointer"
           >
-            <Globe className="h-4 w-4 text-muted-foreground" />
+            {isLocalProxy ? (
+              <Network className="h-4 w-4 text-muted-foreground" />
+            ) : (
+              <Globe className="h-4 w-4 text-muted-foreground" />
+            )}
           </button>
         </TooltipTrigger>
         <TooltipContent>
           <div className="flex items-center gap-2">
-            {proxy.country && (
+            {flagCode && (
               <img
-                src={`https://flagcdn.com/w20/${proxy.country.toLowerCase()}.png`}
+                src={`https://flagcdn.com/w20/${flagCode.toLowerCase()}.png`}
                 className="h-3"
-                alt={proxy.country}
+                alt={proxy.country || flagCode}
               />
             )}
             <div className="flex flex-col">
-              <span className="font-mono text-xs">{proxy.name}</span>
+              <span className="font-mono text-xs">
+                {proxy.name}
+                {isLocalProxy && <span className="ml-1 text-[10px] text-muted-foreground">LOCAL</span>}
+              </span>
               <span className="text-[10px] text-muted-foreground">
                 {proxy.host}:{proxy.port}
               </span>
               {proxy.city && (
                 <span className="text-[10px] text-muted-foreground">{proxy.city}</span>
+              )}
+              {proxy.local_missing && (
+                <span className="text-[10px] text-amber-600">本地代理不可用</span>
               )}
             </div>
           </div>
@@ -678,7 +690,7 @@ export function EnvironmentTableRow({
       if (isRunning) {
         setIsLocalStopping(true);
       }
-      await operations.toggleEnvironment(environment.uuid);
+      await operations.toggleEnvironment(environment.uuid, String(index));
     } catch (e) {
       // 失败时重置本地停止状态
       setIsLocalStopping(false);

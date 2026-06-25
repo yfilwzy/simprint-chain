@@ -7,18 +7,20 @@ import {
   Background,
   Controls,
   Panel,
-  useNodesState,
-  useEdgesState,
+  applyNodeChanges,
+  applyEdgeChanges,
   BackgroundVariant,
   MarkerType,
   ReactFlowProvider,
   useReactFlow,
 } from '@xyflow/react';
-import { Trash2 } from 'lucide-react';
+import { Trash2, Undo2 } from 'lucide-react';
 import type {
   Node,
   Edge,
   Connection,
+  EdgeChange,
+  NodeChange,
   NodeTypes,
   ReactFlowInstance,
   OnConnectEnd,
@@ -56,12 +58,24 @@ export interface FlowStep {
   parentLoopId?: string | null;
 }
 
+export interface SpecialNodePositions {
+  start: { x: number; y: number };
+  end: { x: number; y: number };
+}
+
+export const DEFAULT_SPECIAL_NODE_POSITIONS: SpecialNodePositions = {
+  start: { x: 250, y: 0 },
+  end: { x: 250, y: 200 },
+};
+
 interface FlowCanvasProps {
   steps: FlowStep[];
+  specialPositions: SpecialNodePositions;
   selectedStepId: string | null;
   onSelectStep: (id: string | null) => void;
   onDeleteStep: (id: string) => void;
   onUpdateSteps: (steps: FlowStep[]) => void;
+  onSpecialPositionsChange: (positions: SpecialNodePositions) => void;
   onDropComponent: (
     component: ComponentItem,
     position: { x: number; y: number },
@@ -70,11 +84,15 @@ interface FlowCanvasProps {
     parentLoopId?: string | null
   ) => void;
   onClearSteps?: () => void;
+  onUndo?: () => void;
   clearStepsDisabled?: boolean;
+  undoDisabled?: boolean;
   draggingComponent: ComponentItem | null;
   runStatus?: 'idle' | 'starting' | 'running' | 'success' | 'failed' | 'stopping' | 'stopped';
   stepStatuses?: Record<string, RpaRunnerStepStatus>;
   stepErrors?: Record<string, string>;
+  stepLoopProgress?: Record<string, { current?: number; total?: number }>;
+  stepIncomingEdges?: Record<string, { fromStepId?: string; branchKey?: 'true' | 'false' }>;
 }
 
 const nodeTypes: NodeTypes = {
@@ -83,11 +101,6 @@ const nodeTypes: NodeTypes = {
   endNode: EndNode,
   loopNode: LoopNode,
 };
-
-interface SpecialNodePositions {
-  start: { x: number; y: number };
-  end: { x: number; y: number };
-}
 
 function isLoopStep(step: FlowStep): boolean {
   return step.type === 'loop';
@@ -163,6 +176,19 @@ function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  if (target.isContentEditable) {
+    return true;
+  }
+
+  const tagName = target.tagName.toLowerCase();
+  return tagName === 'input' || tagName === 'textarea' || tagName === 'select';
+}
+
 function getConditionBranches(step: FlowStep): Record<'true' | 'false', string | null> {
   const branches = step.config.branches as Record<string, unknown> | undefined;
   return {
@@ -174,6 +200,10 @@ function getConditionBranches(step: FlowStep): Record<'true' | 'false', string |
 function getNextStepIds(step: FlowStep): string[] {
   if (step.type === 'condition') {
     return Object.values(getConditionBranches(step)).filter((value): value is string => Boolean(value));
+  }
+
+  if (step.type === 'break_loop') {
+    return [];
   }
 
   return step.nextStepId ? [step.nextStepId] : [];
@@ -202,6 +232,26 @@ function summarizeStep(step: FlowStep, t: TFunction<'rpa'>): string {
     case 'navigate': {
       const url = readString(step.config.url);
       return url || t('editor.stepSubtitleDefaults.navigate');
+    }
+    case 'select_tab': {
+      const tabIndex =
+        typeof step.config.tabIndex === 'number' && Number.isFinite(step.config.tabIndex)
+          ? Math.trunc(step.config.tabIndex)
+          : 1;
+      return t('editor.stepSubtitleDefaults.selectTab', {
+        defaultValue: '切换到第 {{index}} 个标签页',
+        index: Math.max(1, tabIndex),
+      });
+    }
+    case 'close_tab': {
+      const tabIndex =
+        typeof step.config.tabIndex === 'number' && Number.isFinite(step.config.tabIndex)
+          ? Math.trunc(step.config.tabIndex)
+          : 1;
+      return t('editor.stepSubtitleDefaults.closeTab', {
+        defaultValue: '关闭第 {{index}} 个标签页',
+        index: Math.max(1, tabIndex),
+      });
     }
     case 'click': {
       const selector = readString(step.config.selector);
@@ -258,6 +308,10 @@ function summarizeStep(step: FlowStep, t: TFunction<'rpa'>): string {
     }
     case 'loop':
       return t('editor.stepSubtitleDefaults.loop');
+    case 'break_loop':
+      return t('editor.stepSubtitleDefaults.breakLoop', {
+        defaultValue: '满足条件时立即退出当前循环',
+      });
     case 'notify':
       return t('editor.stepSubtitleDefaults.notify');
     case 'screenshot': {
@@ -294,6 +348,72 @@ function createBaseEdge(
     labelStyle: { fill: '#64748b', fontSize: 10, fontWeight: 600 },
     labelBgStyle: { fill: 'hsl(var(--background))', fillOpacity: 0.92 },
   };
+}
+
+function disconnectEdgesFromSteps(steps: FlowStep[], removedEdges: Edge[]): FlowStep[] {
+  return steps.map((step) => {
+    let nextStepId = step.nextStepId ?? null;
+    let nextConfig = step.config;
+    let isStart = step.isStart ?? false;
+
+    for (const edge of removedEdges) {
+      if (edge.source === 'start') {
+        if (step.id === edge.target) {
+          isStart = false;
+        }
+        continue;
+      }
+
+      if (step.id !== edge.source) {
+        continue;
+      }
+
+      if (step.type === 'condition') {
+        const branchKey = edge.sourceHandle === 'branch-false' ? 'false' : 'true';
+        const currentBranches = (nextConfig.branches as Record<string, unknown> | undefined) ?? {};
+        if (currentBranches[branchKey] === edge.target) {
+          nextConfig = {
+            ...nextConfig,
+            branches: {
+              ...currentBranches,
+              [branchKey]: null,
+            },
+          };
+        }
+        continue;
+      }
+
+      if (nextStepId === edge.target) {
+        nextStepId = null;
+      }
+    }
+
+    return {
+      ...step,
+      isStart,
+      nextStepId,
+      config: nextConfig,
+    };
+  });
+}
+
+function isPersistedEdge(edge: Edge, steps: FlowStep[]): boolean {
+  if (edge.source === 'start') {
+    return steps.some((step) => step.id === edge.target && step.isStart);
+  }
+
+  const sourceStep = steps.find((step) => step.id === edge.source);
+  if (!sourceStep) {
+    return false;
+  }
+
+  if (sourceStep.type === 'condition') {
+    const branchKey = edge.sourceHandle === 'branch-false' ? 'false' : 'true';
+    const branches = getConditionBranches(sourceStep);
+    return branches[branchKey] === edge.target;
+  }
+
+  return sourceStep.nextStepId === edge.target;
 }
 
 function getReachableStepIds(steps: FlowStep[]): Set<string> {
@@ -354,6 +474,10 @@ function buildGraphEdges(steps: FlowStep[], t: TFunction<'rpa'>): Edge[] {
       continue;
     }
 
+    if (step.type === 'break_loop') {
+      continue;
+    }
+
     if (step.nextStepId) {
       edges.push(createBaseEdge(step.id, step.nextStepId));
       continue;
@@ -370,7 +494,8 @@ function buildGraphEdges(steps: FlowStep[], t: TFunction<'rpa'>): Edge[] {
 function styleEdgeByRunState(
   edge: Edge,
   stepStatuses: Record<string, RpaRunnerStepStatus>,
-  runStatus: FlowCanvasProps['runStatus']
+  runStatus: FlowCanvasProps['runStatus'],
+  stepIncomingEdges: Record<string, { fromStepId?: string; branchKey?: 'true' | 'false' }>
 ): Edge {
   const sourceStatus =
     edge.source === 'start'
@@ -398,6 +523,27 @@ function styleEdgeByRunState(
   }
 
   if (targetStatus === 'running' || targetStatus === 'awaiting_input') {
+    const incoming = stepIncomingEdges[edge.target];
+    const expectedHandle =
+      incoming?.branchKey === 'true'
+        ? 'branch-true'
+        : incoming?.branchKey === 'false'
+          ? 'branch-false'
+          : undefined;
+    const isActiveIncomingEdge =
+      incoming?.fromStepId === edge.source &&
+      (expectedHandle === undefined || expectedHandle === edge.sourceHandle);
+
+    if (!isActiveIncomingEdge) {
+      return {
+        ...edge,
+        animated: false,
+        style: { stroke: '#64748b', strokeWidth: 2 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#64748b' },
+        labelStyle: { ...(edge.labelStyle ?? {}), fill: '#64748b' },
+      };
+    }
+
     const color = targetStatus === 'awaiting_input' ? '#d97706' : '#0ea5e9';
     return {
       ...edge,
@@ -434,7 +580,8 @@ function stepsToNodes(
   t: TFunction<'rpa'>,
   runStatus: FlowCanvasProps['runStatus'],
   stepStatuses: Record<string, RpaRunnerStepStatus>,
-  stepErrors: Record<string, string>
+  stepErrors: Record<string, string>,
+  stepLoopProgress: Record<string, { current?: number; total?: number }>
 ): Node[] {
   const nodes: Node[] = [];
   const loopStepIds = new Set(steps.filter((step) => isLoopStep(step)).map((step) => step.id));
@@ -459,6 +606,12 @@ function stepsToNodes(
           label: step.name,
           subtitle: summarizeStep(step, t),
           enabled: step.enabled,
+          iterations:
+            typeof step.config.iterations === 'number' && Number.isFinite(step.config.iterations)
+              ? step.config.iterations
+              : 3,
+          currentIteration: stepLoopProgress[step.id]?.current,
+          totalIterations: stepLoopProgress[step.id]?.total,
           runStatus: stepStatuses[step.id] ?? 'pending',
           errorSummary: stepErrors[step.id] ?? '',
           childCount: steps.filter((candidate) => candidate.parentLoopId === step.id).length,
@@ -504,17 +657,23 @@ function stepsToNodes(
 
 function FlowCanvasInner({
   steps,
+  specialPositions,
   selectedStepId,
   onSelectStep,
   onDeleteStep,
   onUpdateSteps,
+  onSpecialPositionsChange,
   onDropComponent,
   onClearSteps,
+  onUndo,
   clearStepsDisabled = false,
+  undoDisabled = true,
   draggingComponent,
   runStatus = 'idle',
   stepStatuses = {},
   stepErrors = {},
+  stepLoopProgress = {},
+  stepIncomingEdges = {},
 }: FlowCanvasProps) {
   const { t } = useTranslation('rpa');
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
@@ -522,37 +681,84 @@ function FlowCanvasInner({
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
   const { screenToFlowPosition } = useReactFlow();
 
-  const specialPositionsRef = useRef<SpecialNodePositions>({
-    start: { x: 250, y: 0 },
-    end: { x: 250, y: 200 },
-  });
-
-  const initialSpecialPositions: SpecialNodePositions = {
-    start: { x: 250, y: 0 },
-    end: { x: 250, y: 200 },
-  };
-
-  const [nodes, setNodes, onNodesChange] = useNodesState(
-    stepsToNodes(steps, onDeleteStep, initialSpecialPositions, t, runStatus, stepStatuses, stepErrors)
+  const [nodes, setNodes] = useState<Node[]>(
+    stepsToNodes(
+      steps,
+      onDeleteStep,
+      specialPositions,
+      t,
+      runStatus,
+      stepStatuses,
+      stepErrors,
+      stepLoopProgress
+    )
   );
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(buildGraphEdges(steps, t));
+  const [edges, setEdges] = useState<Edge[]>(buildGraphEdges(steps, t));
 
   useEffect(() => {
     stepsRef.current = steps;
   }, [steps]);
 
+  const removeEdges = useCallback(
+    (removedEdges: Edge[]) => {
+      if (removedEdges.length === 0) {
+        return;
+      }
+
+      const nextSteps = disconnectEdgesFromSteps(stepsRef.current, removedEdges);
+      onUpdateSteps(nextSteps);
+    },
+    [onUpdateSteps]
+  );
+
+  const onNodesChange = useCallback((changes: NodeChange[]) => {
+    const filteredChanges = changes.filter(
+      (change) => change.type !== 'remove' || (change.id !== 'start' && change.id !== 'end')
+    );
+    setNodes((currentNodes) => applyNodeChanges(filteredChanges, currentNodes));
+  }, []);
+
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange<Edge>[]) => {
+      const removedEdgeIds = changes
+        .filter((change) => change.type === 'remove')
+        .map((change) => change.id);
+      const removedEdges = edges
+        .filter((edge) => removedEdgeIds.includes(edge.id))
+        .filter((edge) => isPersistedEdge(edge, stepsRef.current));
+      const effectiveChanges = changes.filter(
+        (change) => change.type !== 'remove' || removedEdges.some((edge) => edge.id === change.id)
+      );
+
+      setEdges((currentEdges) => applyEdgeChanges(effectiveChanges, currentEdges));
+
+      if (removedEdges.length > 0) {
+        removeEdges(removedEdges);
+      }
+    },
+    [edges, removeEdges]
+  );
 
   useEffect(() => {
     setNodes(
-      stepsToNodes(steps, onDeleteStep, specialPositionsRef.current, t, runStatus, stepStatuses, stepErrors)
+      stepsToNodes(
+        steps,
+        onDeleteStep,
+        specialPositions,
+        t,
+        runStatus,
+        stepStatuses,
+        stepErrors,
+        stepLoopProgress
+      )
     );
     setEdges(buildGraphEdges(steps, t));
-  }, [steps, onDeleteStep, setNodes, setEdges, t, runStatus, stepStatuses, stepErrors]);
+  }, [steps, specialPositions, onDeleteStep, setNodes, setEdges, t, runStatus, stepStatuses, stepErrors, stepLoopProgress]);
 
 
 const styledEdges = useMemo(
-    () => edges.map((edge) => styleEdgeByRunState(edge, stepStatuses, runStatus)),
-    [edges, runStatus, stepStatuses]
+    () => edges.map((edge) => styleEdgeByRunState(edge, stepStatuses, runStatus, stepIncomingEdges)),
+    [edges, runStatus, stepStatuses, stepIncomingEdges]
   );
 
   const onConnect = useCallback(
@@ -564,22 +770,15 @@ const styledEdges = useMemo(
       const sourceId = params.source;
       const targetId = params.target;
       const sourceHandle = params.sourceHandle ?? null;
-      const currentStartStep = steps.find((step) => step.isStart);
       const sourceStep = steps.find((step) => step.id === sourceId);
+      if (sourceId === targetId) {
+        return;
+      }
 
       if (sourceId === 'start') {
-        if (currentStartStep && currentStartStep.id !== targetId) {
-          return;
-        }
       } else if (!sourceStep) {
         return;
-      } else if (sourceStep.type === 'condition') {
-        const branchKey = sourceHandle === 'branch-false' ? 'false' : 'true';
-        const branches = getConditionBranches(sourceStep);
-        if (branches[branchKey as 'true' | 'false'] && branches[branchKey as 'true' | 'false'] !== targetId) {
-          return;
-        }
-      } else if (sourceStep.nextStepId && sourceStep.nextStepId !== targetId) {
+      } else if (sourceStep.type === 'break_loop') {
         return;
       }
 
@@ -674,13 +873,47 @@ const styledEdges = useMemo(
     onSelectStep(null);
   }, [onSelectStep]);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isEditableTarget(event.target)) {
+        return;
+      }
+
+      if (event.key !== 'Delete' && event.key !== 'Backspace') {
+        return;
+      }
+
+      const selectedEdges = edges.filter((edge) => edge.selected);
+      if (selectedEdges.length > 0) {
+        event.preventDefault();
+        removeEdges(selectedEdges);
+        return;
+      }
+
+      const selectedStepIds = nodes
+        .filter((node) => node.selected && node.id !== 'start' && node.id !== 'end')
+        .map((node) => node.id);
+      if (selectedStepIds.length === 0) {
+        return;
+      }
+
+      event.preventDefault();
+      selectedStepIds.forEach((stepId) => onDeleteStep(stepId));
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [edges, nodes, onDeleteStep, removeEdges]);
+
   const onNodeDragStop = useCallback(
     (event: ReactMouseEvent, node: Node) => {
       if (node.id === 'start' || node.id === 'end') {
-        specialPositionsRef.current = {
-          ...specialPositionsRef.current,
+        onSpecialPositionsChange({
+          ...specialPositions,
           [node.id]: node.position,
-        };
+        });
         return;
       }
 
@@ -737,28 +970,29 @@ const styledEdges = useMemo(
         ? steps.find((step) => step.id === draggedStep.parentLoopId && isLoopStep(step)) ?? null
         : null;
       const targetLoop = findContainingLoopStep(steps, hitPosition, null) ?? sourceLoop;
+      const effectiveTargetLoop = draggedStep.type === 'break_loop' ? targetLoop ?? sourceLoop : targetLoop;
 
-      const targetLoopChildCount = targetLoop
-        ? steps.filter((step) => step.parentLoopId === targetLoop.id && step.id !== node.id).length + 1
+      const targetLoopChildCount = effectiveTargetLoop
+        ? steps.filter((step) => step.parentLoopId === effectiveTargetLoop.id && step.id !== node.id).length + 1
         : 0;
       const pointerFlowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      const relativeX = targetLoop
-        ? Math.max(LOOP_REGION_PADDING_X, pointerFlowPosition.x - (targetLoop.position?.x ?? 0) - DEFAULT_STEP_WIDTH / 2)
+      const relativeX = effectiveTargetLoop
+        ? Math.max(LOOP_REGION_PADDING_X, pointerFlowPosition.x - (effectiveTargetLoop.position?.x ?? 0) - DEFAULT_STEP_WIDTH / 2)
         : 0;
-      const relativeY = targetLoop
-        ? Math.max(LOOP_REGION_CONTENT_TOP, pointerFlowPosition.y - (targetLoop.position?.y ?? 0) - DEFAULT_STEP_HEIGHT / 2)
+      const relativeY = effectiveTargetLoop
+        ? Math.max(LOOP_REGION_CONTENT_TOP, pointerFlowPosition.y - (effectiveTargetLoop.position?.y ?? 0) - DEFAULT_STEP_HEIGHT / 2)
         : 0;
 
-      const targetLoopNextDimensions = targetLoop
+      const targetLoopNextDimensions = effectiveTargetLoop
         ? (() => {
-            const dimensions = getLoopAutoDimensions(targetLoop, targetLoopChildCount);
+            const dimensions = getLoopAutoDimensions(effectiveTargetLoop, targetLoopChildCount);
             return {
-              width: getLoopExpandedWidthForChild(targetLoop, relativeX),
-              height: Math.max(dimensions.height, getLoopExpandedHeightForChild(targetLoop, relativeY)),
+              width: getLoopExpandedWidthForChild(effectiveTargetLoop, relativeX),
+              height: Math.max(dimensions.height, getLoopExpandedHeightForChild(effectiveTargetLoop, relativeY)),
             };
           })()
         : null;
-      const desiredAbsolutePosition = targetLoop
+      const desiredAbsolutePosition = effectiveTargetLoop
         ? {
             x: pointerFlowPosition.x - DEFAULT_STEP_WIDTH / 2,
             y: pointerFlowPosition.y - DEFAULT_STEP_HEIGHT / 2,
@@ -766,7 +1000,7 @@ const styledEdges = useMemo(
         : absolutePosition;
 
       const updatedSteps = steps.map((step) => {
-        if (targetLoop && step.id === targetLoop.id && targetLoopNextDimensions) {
+        if (effectiveTargetLoop && step.id === effectiveTargetLoop.id && targetLoopNextDimensions) {
           return {
             ...step,
             config: {
@@ -781,15 +1015,15 @@ const styledEdges = useMemo(
           return step;
         }
 
-        if (targetLoop && targetLoopNextDimensions) {
+        if (effectiveTargetLoop && targetLoopNextDimensions) {
           return {
             ...step,
-            parentLoopId: targetLoop.id,
+            parentLoopId: effectiveTargetLoop.id,
             position: toLoopChildPosition(
               {
-                ...targetLoop,
+                ...effectiveTargetLoop,
                 config: {
-                  ...targetLoop.config,
+                  ...effectiveTargetLoop.config,
                   loopWidth: targetLoopNextDimensions.width,
                   loopHeight: targetLoopNextDimensions.height,
                 },
@@ -797,6 +1031,10 @@ const styledEdges = useMemo(
               desiredAbsolutePosition
             ),
           };
+        }
+
+        if (draggedStep.type === 'break_loop') {
+          return step;
         }
 
         return {
@@ -827,7 +1065,7 @@ const styledEdges = useMemo(
 
       onUpdateSteps(recalculatedSteps);
     },
-    [screenToFlowPosition, steps, onUpdateSteps]
+    [screenToFlowPosition, steps, specialPositions, onUpdateSteps, onSpecialPositionsChange]
   );
 
   const handleCanvasClick = useCallback(
@@ -886,6 +1124,7 @@ const styledEdges = useMemo(
           className="bg-background"
           style={{ pointerEvents: draggingComponent ? 'none' : 'auto' }}
           connectOnClick={false}
+          deleteKeyCode={null}
         >
           <Background
             variant={BackgroundVariant.Dots}
@@ -900,16 +1139,28 @@ const styledEdges = useMemo(
             className="bg-background! border-border! shadow-md! [&>button]:bg-background! [&>button]:border-border! [&>button]:text-muted-foreground! [&>button:hover]:bg-accent!"
           />
           <Panel position="top-right" className="mt-2 mr-2">
-            <button
-              type="button"
-              onClick={onClearSteps}
-              disabled={clearStepsDisabled}
-              className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background text-muted-foreground shadow-md transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-              aria-label={t('editor.menu.clearSteps')}
-              title={t('editor.menu.clearSteps')}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onUndo}
+                disabled={undoDisabled}
+                className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background text-muted-foreground shadow-md transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label={t('editor.menu.undo', { defaultValue: '撤销' })}
+                title={t('editor.menu.undo', { defaultValue: '撤销' })}
+              >
+                <Undo2 className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={onClearSteps}
+                disabled={clearStepsDisabled}
+                className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background text-muted-foreground shadow-md transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label={t('editor.menu.clearSteps')}
+                title={t('editor.menu.clearSteps')}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
           </Panel>
         </ReactFlow>
 

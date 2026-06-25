@@ -15,10 +15,12 @@ import {
   Globe,
   Keyboard,
   Loader2,
+  LogOut,
   Mail,
   MessageSquare,
   MousePointer2,
   Navigation,
+  PanelsTopLeft,
   Repeat,
   Upload,
   Variable,
@@ -30,11 +32,14 @@ const stepIcons: Record<string, ElementType> = {
   click: MousePointer2,
   input: Keyboard,
   navigate: Navigation,
+  select_tab: PanelsTopLeft,
+  close_tab: X,
   screenshot: Camera,
   scroll: Globe,
   wait: Clock3,
   condition: GitBranch,
   loop: Repeat,
+  break_loop: LogOut,
   extract: FileText,
   download: Download,
   upload: Upload,
@@ -49,11 +54,14 @@ const stepColors: Record<string, string> = {
   click: 'border-blue-500/50 bg-blue-500/5',
   input: 'border-purple-500/50 bg-purple-500/5',
   navigate: 'border-cyan-500/50 bg-cyan-500/5',
+  select_tab: 'border-blue-600/50 bg-blue-600/5',
+  close_tab: 'border-red-500/50 bg-red-500/5',
   screenshot: 'border-pink-500/50 bg-pink-500/5',
   scroll: 'border-teal-500/50 bg-teal-500/5',
   wait: 'border-amber-500/50 bg-amber-500/5',
   condition: 'border-orange-500/50 bg-orange-500/5',
   loop: 'border-green-500/50 bg-green-500/5',
+  break_loop: 'border-amber-600/50 bg-amber-600/5',
   extract: 'border-indigo-500/50 bg-indigo-500/5',
   download: 'border-emerald-500/50 bg-emerald-500/5',
   upload: 'border-rose-500/50 bg-rose-500/5',
@@ -68,11 +76,14 @@ const iconColors: Record<string, string> = {
   click: 'text-blue-500',
   input: 'text-purple-500',
   navigate: 'text-cyan-500',
+  select_tab: 'text-blue-600',
+  close_tab: 'text-red-500',
   screenshot: 'text-pink-500',
   scroll: 'text-teal-500',
   wait: 'text-amber-500',
   condition: 'text-orange-500',
   loop: 'text-green-500',
+  break_loop: 'text-amber-600',
   extract: 'text-indigo-500',
   download: 'text-emerald-500',
   upload: 'text-rose-500',
@@ -105,6 +116,7 @@ function StepNodeComponent({ id, data, selected }: NodeProps) {
   const hasStatusTag = runStatus !== 'pending';
   const hasMetaRow = Boolean(subtitle) || hasStatusTag;
   const isCondition = nodeData.type === 'condition';
+  const hasSourceHandle = nodeData.type !== 'break_loop';
 
   return (
     <div
@@ -196,13 +208,13 @@ function StepNodeComponent({ id, data, selected }: NodeProps) {
             className="!w-3 !h-3 !bg-rose-500 !border-2 !border-background"
           />
         </>
-      ) : (
+      ) : hasSourceHandle ? (
         <Handle
           type="source"
           position={Position.Bottom}
           className="!w-3 !h-3 !bg-muted-foreground !border-2 !border-background"
         />
-      )}
+      ) : null}
     </div>
   );
 }

@@ -1,7 +1,11 @@
 ﻿import type { RpaTaskDetailDto, UpsertRpaTaskRequest } from '../../api';
 import type { PortableRpaTaskDocument } from '../../lib/rpa-transfer';
 import type { RpaWorkflowSchema, RpaWorkflowStep } from '../../types';
-import type { FlowStep } from './flow-canvas';
+import {
+  DEFAULT_SPECIAL_NODE_POSITIONS,
+  type FlowStep,
+  type SpecialNodePositions,
+} from './flow-canvas';
 import type { TaskConfig, TaskVariable } from './task-settings-form';
 
 const DEFAULT_NAVIGATE_URL = 'https://www.google.com';
@@ -10,6 +14,7 @@ const DEFAULT_INPUT_TEXT = 'Hello World';
 interface EditorState {
   config: TaskConfig;
   steps: FlowStep[];
+  specialPositions: SpecialNodePositions;
   workflow: RpaWorkflowSchema;
 }
 
@@ -20,6 +25,20 @@ interface StoredWorkflowStep {
   enabled?: boolean;
   next?: string | null;
   branches?: Record<string, string>;
+  click_type?: string;
+  wait_for_element?: boolean;
+  clear_first?: boolean;
+  type_slowly?: boolean;
+  duration_ms?: number;
+  timeout_ms?: number;
+  output?: string;
+  script?: string;
+  url?: string;
+  value?: string;
+  target?: {
+    by?: string;
+    value?: string;
+  };
   config?: Record<string, unknown>;
   ui?: {
     source_type?: string;
@@ -33,7 +52,21 @@ interface StoredWorkflowStep {
 
 interface StoredWorkflowMeta {
   start_step_id?: string | null;
-  global_variables?: Array<{ name?: string; value?: string }>;
+  global_variables?: Array<{
+    name?: string;
+    value?: string;
+    prompt_on_run?: boolean;
+    required?: boolean;
+  }>;
+  close_browser_on_complete?: boolean;
+  start_position?: {
+    x?: number;
+    y?: number;
+  };
+  end_position?: {
+    x?: number;
+    y?: number;
+  };
 }
 
 function buildSelector(selector: unknown) {
@@ -52,6 +85,25 @@ function buildSelector(selector: unknown) {
 
 function asNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function readCanvasPosition(
+  value: unknown,
+  fallback: { x: number; y: number }
+): { x: number; y: number } {
+  if (
+    value &&
+    typeof value === 'object' &&
+    typeof (value as { x?: unknown }).x === 'number' &&
+    typeof (value as { y?: unknown }).y === 'number'
+  ) {
+    return {
+      x: (value as { x: number }).x,
+      y: (value as { y: number }).y,
+    };
+  }
+
+  return fallback;
 }
 
 function mapFlowStepType(type: string, config: Record<string, unknown>): string {
@@ -98,6 +150,15 @@ function buildWorkflowStep(step: FlowStep, nextStepId: string | null): RpaWorkfl
             ? step.config.url.trim()
             : DEFAULT_NAVIGATE_URL,
         wait_until: step.config.waitForLoad === false ? 'commit' : 'load',
+      };
+    case 'select_tab':
+    case 'close_tab':
+      return {
+        ...baseStep,
+        config: {
+          ...baseStep.config,
+          tabIndex: asNumber(step.config.tabIndex, 1),
+        },
       };
     case 'click':
       return {
@@ -229,6 +290,11 @@ function buildWorkflowStep(step: FlowStep, nextStepId: string | null): RpaWorkfl
         },
       };
     }
+    case 'break_loop':
+      return {
+        ...baseStep,
+        next: null,
+      };
     case 'screenshot': {
       const screenshotMode =
         step.config.captureMode === 'element'
@@ -260,6 +326,24 @@ function toStringArray(value: unknown): string[] {
   return value.map(String).filter(Boolean);
 }
 
+function mapStoredGlobalVariables(
+  variables: StoredWorkflowMeta['global_variables'] | undefined
+): TaskVariable[] {
+  if (!Array.isArray(variables)) {
+    return [];
+  }
+
+  return variables
+    .map((variable, index) => ({
+      id: `var-${index}`,
+      name: typeof variable?.name === 'string' ? variable.name : '',
+      value: typeof variable?.value === 'string' ? variable.value : '',
+      promptOnRun: variable?.prompt_on_run === true,
+      required: variable?.required === true,
+    }))
+    .filter((variable) => variable.name.trim());
+}
+
 function buildFlowStepFromStoredStep(step: StoredWorkflowStep): FlowStep {
   const uiType = typeof step.ui?.source_type === 'string' ? step.ui.source_type : step.type;
   const position = step.ui?.position;
@@ -268,6 +352,57 @@ function buildFlowStepFromStoredStep(step: StoredWorkflowStep): FlowStep {
     step.config && typeof step.config === 'object'
       ? { ...(step.config as Record<string, unknown>) }
       : {};
+  const selector = typeof step.target?.value === 'string' ? step.target.value : '';
+
+  if (!config.selector && selector) {
+    config.selector = selector;
+  }
+
+  if (!config.url && typeof step.url === 'string') {
+    config.url = step.url;
+  }
+
+  if (step.type === 'click') {
+    if (!config.clickType && typeof step.click_type === 'string') {
+      config.clickType = step.click_type;
+    }
+    if (!Object.prototype.hasOwnProperty.call(config, 'waitForElement')) {
+      config.waitForElement = step.wait_for_element !== false;
+    }
+  }
+
+  if (step.type === 'fill') {
+    if (!config.text && typeof step.value === 'string') {
+      config.text = step.value;
+    }
+    if (!Object.prototype.hasOwnProperty.call(config, 'clearFirst')) {
+      config.clearFirst = step.clear_first !== false;
+    }
+    if (!Object.prototype.hasOwnProperty.call(config, 'typeSlowly')) {
+      config.typeSlowly = step.type_slowly === true;
+    }
+  }
+
+  if (step.type === 'delay') {
+    if (!config.duration && typeof step.duration_ms === 'number') {
+      config.duration = step.duration_ms;
+    }
+    if (!config.waitType) {
+      config.waitType = 'time';
+    }
+  }
+
+  if (step.type === 'wait_for' && !config.timeout && typeof step.timeout_ms === 'number') {
+    config.timeout = step.timeout_ms;
+  }
+
+  if (!config.outputKey && typeof step.output === 'string') {
+    config.outputKey = step.output;
+  }
+
+  if (!config.script && typeof step.script === 'string') {
+    config.script = step.script;
+  }
 
   if (step.branches && typeof step.branches === 'object') {
     config.branches = step.branches;
@@ -343,7 +478,11 @@ export function buildWorkflowSchema(config: TaskConfig, steps: FlowStep[]): RpaW
   };
 }
 
-export function buildTaskPayload(config: TaskConfig, steps: FlowStep[]): UpsertRpaTaskRequest {
+export function buildTaskPayload(
+  config: TaskConfig,
+  steps: FlowStep[],
+  specialPositions: SpecialNodePositions
+): UpsertRpaTaskRequest {
   const workflow = buildWorkflowSchema(config, steps);
 
   return {
@@ -369,7 +508,17 @@ export function buildTaskPayload(config: TaskConfig, steps: FlowStep[]): UpsertR
         workflow_step: step,
         workflow_meta: {
           start_step_id: workflow.start_step_id,
-          global_variables: workflow.variables,
+          global_variables: config.globalVariables
+            .map((variable) => ({
+              name: variable.name.trim(),
+              value: variable.value,
+              prompt_on_run: variable.promptOnRun === true,
+              required: variable.promptOnRun === true && variable.required === true,
+            }))
+            .filter((variable) => variable.name),
+          close_browser_on_complete: config.closeBrowserOnComplete === true,
+          start_position: specialPositions.start,
+          end_position: specialPositions.end,
         },
         legacy_config: steps[index]?.config ?? {},
       },
@@ -394,15 +543,17 @@ export function mapTaskDetailToEditorState(detail: RpaTaskDetailDto): EditorStat
     ?.workflow_meta as StoredWorkflowMeta | undefined;
   const storedStartStepId =
     typeof storedWorkflowMeta?.start_step_id === 'string' ? storedWorkflowMeta.start_step_id : null;
-  const storedGlobalVariables: TaskVariable[] = Array.isArray(storedWorkflowMeta?.global_variables)
-    ? storedWorkflowMeta.global_variables
-        .map((variable, index) => ({
-          id: `var-${index}`,
-          name: typeof variable?.name === 'string' ? variable.name : '',
-          value: typeof variable?.value === 'string' ? variable.value : '',
-        }))
-        .filter((variable) => variable.name.trim())
-    : [];
+  const storedGlobalVariables = mapStoredGlobalVariables(storedWorkflowMeta?.global_variables);
+  const specialPositions: SpecialNodePositions = {
+    start: readCanvasPosition(
+      storedWorkflowMeta?.start_position,
+      DEFAULT_SPECIAL_NODE_POSITIONS.start
+    ),
+    end: readCanvasPosition(
+      storedWorkflowMeta?.end_position,
+      DEFAULT_SPECIAL_NODE_POSITIONS.end
+    ),
+  };
 
   const steps = sortedSteps.map((step, index) => {
     const storedStep = step.config?.workflow_step;
@@ -434,6 +585,7 @@ export function mapTaskDetailToEditorState(detail: RpaTaskDetailDto): EditorStat
     timeout: detail.task.timeout ?? 300,
     concurrency: detail.task.concurrency ?? 1,
     stopOnError: detail.task.stop_on_error ?? true,
+    closeBrowserOnComplete: storedWorkflowMeta?.close_browser_on_complete === true,
     notifyOnComplete: detail.task.notify_on_complete ?? false,
     notifyOnError: detail.task.notify_on_error ?? true,
   };
@@ -441,6 +593,7 @@ export function mapTaskDetailToEditorState(detail: RpaTaskDetailDto): EditorStat
   return {
     config,
     steps,
+    specialPositions,
     workflow: buildWorkflowSchema(config, steps),
   };
 }
@@ -454,29 +607,49 @@ export function mapPortableTaskToEditorState(document: PortableRpaTaskDocument):
     (a, b) => (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER)
   );
 
+  const storedWorkflowMeta = sortedSteps.find((step) => {
+    const config = step.config;
+    return config && typeof config === 'object' && 'workflow_meta' in config;
+  })?.config?.workflow_meta as StoredWorkflowMeta | undefined;
   const importedIdMap = new Map<string, string>();
   sortedSteps.forEach((step) => {
-    importedIdMap.set(step.uuid, crypto.randomUUID());
+    const nextId = crypto.randomUUID();
+    importedIdMap.set(step.uuid, nextId);
+
+    const storedStep = step.config?.workflow_step;
+    if (storedStep && typeof storedStep === 'object' && typeof storedStep.id === 'string') {
+      importedIdMap.set(storedStep.id, nextId);
+    }
   });
+  const storedStartStepId =
+    typeof storedWorkflowMeta?.start_step_id === 'string'
+      ? importedIdMap.get(storedWorkflowMeta.start_step_id) ?? null
+      : null;
 
   const steps = sortedSteps.map((step, index) => {
-    const legacyStep = buildLegacyFlowStep(
-      {
-        uuid: step.uuid,
-        step_type: step.step_type,
-        name: step.name,
-        config: step.config,
-        enabled: step.enabled ?? true,
-        position_x: step.position_x,
-        position_y: step.position_y,
-        sort_order: step.sort_order,
-        next_step_uuid: step.next_step_uuid,
-        branch_config: step.branch_config,
-      },
-      step.next_step_uuid ?? sortedSteps[index + 1]?.uuid ?? null
-    );
-
-    const currentBranches = (legacyStep.config.branches as Record<string, unknown> | undefined) ?? {};
+    const storedStep =
+      step.config?.workflow_step && typeof step.config.workflow_step === 'object'
+        ? (step.config.workflow_step as StoredWorkflowStep)
+        : null;
+    const baseStep = storedStep
+      ? buildFlowStepFromStoredStep(storedStep)
+      : buildLegacyFlowStep(
+          {
+            uuid: step.uuid,
+            step_type: step.step_type,
+            name: step.name,
+            config: step.config,
+            enabled: step.enabled ?? true,
+            position_x: step.position_x,
+            position_y: step.position_y,
+            sort_order: step.sort_order,
+            next_step_uuid: step.next_step_uuid,
+            branch_config: step.branch_config,
+          },
+          step.next_step_uuid ?? sortedSteps[index + 1]?.uuid ?? null
+        );
+    const sourceId = storedStep?.id ?? step.uuid;
+    const currentBranches = (baseStep.config.branches as Record<string, unknown> | undefined) ?? {};
     const mappedBranches = Object.fromEntries(
       Object.entries(currentBranches).map(([key, value]) => [
         key,
@@ -485,17 +658,18 @@ export function mapPortableTaskToEditorState(document: PortableRpaTaskDocument):
     );
 
     return {
-      ...legacyStep,
-      id: importedIdMap.get(step.uuid) ?? legacyStep.id,
-      nextStepId: step.next_step_uuid ? importedIdMap.get(step.next_step_uuid) ?? null : null,
-      isStart: index === 0,
+      ...baseStep,
+      id: importedIdMap.get(sourceId) ?? baseStep.id,
+      nextStepId: baseStep.nextStepId ? importedIdMap.get(baseStep.nextStepId) ?? null : null,
+      parentLoopId: baseStep.parentLoopId ? importedIdMap.get(baseStep.parentLoopId) ?? null : null,
+      isStart: storedStartStepId ? importedIdMap.get(sourceId) === storedStartStepId : index === 0,
       config:
         Object.keys(mappedBranches).length > 0
           ? {
-              ...legacyStep.config,
+              ...baseStep.config,
               branches: mappedBranches,
             }
-          : legacyStep.config,
+          : baseStep.config,
     };
   });
 
@@ -511,12 +685,13 @@ export function mapPortableTaskToEditorState(document: PortableRpaTaskDocument):
     cronExpression: document.task.cron_expression ?? undefined,
     selectedEnvironments: document.task.environment_uuids || [],
     runMode: document.task.run_mode === 'parallel' ? 'parallel' : 'sequential',
-    globalVariables: [],
+    globalVariables: mapStoredGlobalVariables(storedWorkflowMeta?.global_variables),
     retryCount: document.task.retry_count ?? 3,
     retryInterval: document.task.retry_interval ?? 5,
     timeout: document.task.timeout ?? 300,
     concurrency: document.task.concurrency ?? 1,
     stopOnError: document.task.stop_on_error ?? true,
+    closeBrowserOnComplete: storedWorkflowMeta?.close_browser_on_complete === true,
     notifyOnComplete: document.task.notify_on_complete ?? false,
     notifyOnError: document.task.notify_on_error ?? true,
   };
@@ -524,6 +699,16 @@ export function mapPortableTaskToEditorState(document: PortableRpaTaskDocument):
   return {
     config,
     steps,
+    specialPositions: {
+      start: readCanvasPosition(
+        storedWorkflowMeta?.start_position,
+        DEFAULT_SPECIAL_NODE_POSITIONS.start
+      ),
+      end: readCanvasPosition(
+        storedWorkflowMeta?.end_position,
+        DEFAULT_SPECIAL_NODE_POSITIONS.end
+      ),
+    },
     workflow: buildWorkflowSchema(config, steps),
   };
 }

@@ -1,6 +1,11 @@
 ﻿import { useCallback, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { extractWorkflowSchema, getRpaTaskDetail, type RpaTaskDetailDto } from '../api';
+import {
+  extractTaskRunOptions,
+  extractWorkflowSchema,
+  getRpaTaskDetail,
+  type RpaTaskDetailDto,
+} from '../api';
 import type { RpaTask, RpaWorkflowStep } from '../types';
 import { RpaRunner } from '../runtime/runner';
 import { CdpBrowserAdapter } from '../runtime/cdp-browser-adapter';
@@ -67,7 +72,7 @@ interface UseRpaExecutionResult {
     pending: PendingExecution | null;
     openDialog: (id: string) => Promise<void>;
     closeDialog: () => void;
-    confirmRun: () => Promise<void>;
+    confirmRun: (variableOverrides?: Record<string, string>) => Promise<void>;
   };
   executionDrawer: {
     open: boolean;
@@ -97,6 +102,39 @@ function normalizeExecutionError(error: unknown): string {
 
   if (message === 'CDP_CONNECTION_CLOSED' || message.includes('CDP connection closed')) {
     return '浏览器连接已关闭，请重新执行。';
+  }
+
+  if (message === 'TAB_INDEX_INVALID' || message.includes('TAB_INDEX_INVALID')) {
+    return '请选择有效的标签页位置。';
+  }
+
+  if (message.startsWith('TAB_INDEX_OUT_OF_RANGE:')) {
+    const [, rawIndex, rawTotal] = message.split(':');
+    return `标签页位置超出范围。当前共有 ${rawTotal || '?'} 个标签页，找不到第 ${rawIndex || '?'} 个标签页。`;
+  }
+
+  if (message === 'TAB_CLOSE_LAST_UNSUPPORTED' || message.includes('TAB_CLOSE_LAST_UNSUPPORTED')) {
+    return '至少需要保留一个标签页，无法关闭最后一个标签页。';
+  }
+
+  if (message === 'NO_ACTIVE_TAB_AFTER_CLOSE' || message.includes('NO_ACTIVE_TAB_AFTER_CLOSE')) {
+    return '关闭标签页后未找到可用的活动标签页，请重新执行。';
+  }
+
+  if (message === 'BREAK_LOOP_OUTSIDE_LOOP' || message.includes('BREAK_LOOP_OUTSIDE_LOOP')) {
+    return '退出循环节点只能在循环区域内使用。';
+  }
+
+  if (message === 'NODE_RUNTIME_NOT_FOUND' || message.includes('NODE_RUNTIME_NOT_FOUND')) {
+    return '本地执行需要 Node.js 环境，但当前系统未检测到 Node。';
+  }
+
+  if (message === 'LOCAL_SCRIPT_TIMEOUT' || message.includes('LOCAL_SCRIPT_TIMEOUT')) {
+    return '本地脚本执行超时。';
+  }
+
+  if (message === 'TAB_TARGET_UNAVAILABLE' || message === 'RPA_BROWSER_NOT_FOUND') {
+    return '当前标签页无法连接，请重新执行。';
   }
 
   if (message === 'LOOP_BODY_CYCLE') {
@@ -187,7 +225,7 @@ export function useRpaExecution(params: UseRpaExecutionParams): UseRpaExecutionR
     [execution?.taskId]
   );
 
-  const confirmRun = useCallback(async () => {
+  const confirmRun = useCallback(async (variableOverrides: Record<string, string> = {}) => {
     if (!pendingExecution) {
       return;
     }
@@ -197,11 +235,23 @@ export function useRpaExecution(params: UseRpaExecutionParams): UseRpaExecutionR
       toast.error('任务流程数据无效');
       return;
     }
+    const runOptions = extractTaskRunOptions(pendingExecution.detail);
 
     if (!pendingExecution.detail.environment_uuids?.length) {
       toast.error('请先绑定环境后再执行');
       return;
     }
+
+    const workflowWithOverrides = {
+      ...workflow,
+      variables: workflow.variables.map((variable) => ({
+        ...variable,
+        value:
+          Object.prototype.hasOwnProperty.call(variableOverrides, variable.name)
+            ? variableOverrides[variable.name] ?? ''
+            : variable.value,
+      })),
+    };
 
     stopRequestedRef.current = false;
     const startedAt = new Date().toISOString();
@@ -210,10 +260,10 @@ export function useRpaExecution(params: UseRpaExecutionParams): UseRpaExecutionR
       taskName: pendingExecution.task.name,
       status: 'running',
       startedAt,
-      totalSteps: workflow.steps.length,
+      totalSteps: workflowWithOverrides.steps.length,
       workflow: {
-        startStepId: workflow.start_step_id,
-        steps: workflow.steps,
+        startStepId: workflowWithOverrides.start_step_id,
+        steps: workflowWithOverrides.steps,
       },
       currentStepName: undefined,
       currentEnvUuid: undefined,
@@ -263,10 +313,12 @@ export function useRpaExecution(params: UseRpaExecutionParams): UseRpaExecutionR
 
           const endpoint = await waitForCdpEndpoint(envUuid);
           const runner = new RpaRunner(new CdpBrowserAdapter());
-          const stepNameMap = new Map(workflow.steps.map((step) => [step.id, step.name]));
+          const stepNameMap = new Map(
+            workflowWithOverrides.steps.map((step) => [step.id, step.name])
+          );
 
           await runner.run(
-            workflow,
+            workflowWithOverrides,
             { envUuid, browserWsUrl: endpoint.browser_ws_url! },
             {
               onStepStatusChange: (event) => {
@@ -318,11 +370,11 @@ export function useRpaExecution(params: UseRpaExecutionParams): UseRpaExecutionR
             finishedAt: new Date().toISOString(),
           }));
 
-          if (!failedBecauseStopped && workflow.settings.stop_on_error) {
+          if (!failedBecauseStopped && workflowWithOverrides.settings.stop_on_error) {
             break;
           }
         } finally {
-          if (startedByRuntime) {
+          if (startedByRuntime && runOptions.closeBrowserOnComplete) {
             await stopEnvironmentRuntime(envUuid).catch(() => undefined);
           }
         }

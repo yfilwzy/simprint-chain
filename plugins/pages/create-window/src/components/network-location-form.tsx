@@ -9,23 +9,39 @@ import type {
   MatchMode,
   GeolocationPrompt,
   AdvancedFingerprintSettings,
+  ProxySourceMode,
 } from '../types';
 import { CreateWindowProxyDrawer } from './create-window-proxy-drawer';
 // @ts-ignore - Cross-plugin import
 import { listProxies, type ProxyItem } from '../../../environment-manager/src/api';
 // @ts-ignore - Cross-plugin import
-import { listProxyChains, type ProxyChainSummary } from '../../../proxy-center/src/api/proxy-chain';
+import {
+  getLocalMihomoProxyRecords,
+  type MihomoLocalProxyRecord,
+} from '../../../environment-manager/src/utils';
 
 interface NetworkLocationFormProps {
   basicSettings: BasicSettings;
   advancedSettings: AdvancedFingerprintSettings;
+  proxySourceMode: ProxySourceMode;
   proxyUuids: string[]; // 代理 UUID 列表
-  proxyChainId?: string; // 链式代理 ID
+  localProxyNodeNames: string[];
   createCount?: number; // 可选，仅在创建模式下使用，用于限制代理选择数量
   onBasicSettingsChange: (value: BasicSettings) => void;
   onAdvancedSettingsChange: (value: AdvancedFingerprintSettings) => void;
-  onProxyUuidsChange: (value: string[]) => void; // 更新代理 UUID 列表
-  onProxyChainIdChange?: (value: string) => void; // 更新链式代理 ID
+  onProxySelectionChange: (value: {
+    mode: ProxySourceMode;
+    remoteProxyUuids: string[];
+    localProxyNodeNames: string[];
+  }) => void;
+}
+
+interface ProxyDisplayItem {
+  key: string;
+  name: string;
+  host: string;
+  port: number;
+  source: ProxySourceMode;
 }
 
 // 分段控制器组件
@@ -62,23 +78,45 @@ function SegmentedControl<T extends string>({
 export function NetworkLocationForm({
   basicSettings,
   advancedSettings,
+  proxySourceMode,
   proxyUuids,
-  proxyChainId,
+  localProxyNodeNames,
   createCount,
   onBasicSettingsChange,
   onAdvancedSettingsChange,
-  onProxyUuidsChange,
-  onProxyChainIdChange,
+  onProxySelectionChange,
 }: NetworkLocationFormProps) {
   const { t } = useTranslation('create-window');
   const [proxyDrawerOpen, setProxyDrawerOpen] = useState(false);
   const [allProxies, setAllProxies] = useState<ProxyItem[]>([]);
-  const [proxyChains, setProxyChains] = useState<ProxyChainSummary[]>([]);
+  const [localProxies, setLocalProxies] = useState<MihomoLocalProxyRecord[]>([]);
 
   // 获取选中的代理信息（用于显示）
-  const selectedProxies = useMemo(() => {
-    return allProxies.filter((p) => proxyUuids.includes(p.uuid));
-  }, [proxyUuids, allProxies]);
+  const selectedProxies = useMemo<ProxyDisplayItem[]>(() => {
+    if (proxySourceMode === 'local') {
+      const localProxyMap = new Map(localProxies.map((proxy) => [proxy.node_name, proxy]));
+      return localProxyNodeNames.map((nodeName) => {
+        const proxy = localProxyMap.get(nodeName);
+        return {
+          key: nodeName,
+          name: proxy?.name || nodeName,
+          host: proxy?.listen_host || '127.0.0.1',
+          port: proxy?.listen_port || 0,
+          source: 'local',
+        };
+      });
+    }
+
+    return allProxies
+      .filter((p) => proxyUuids.includes(p.uuid))
+      .map((proxy) => ({
+        key: proxy.uuid,
+        name: proxy.name,
+        host: proxy.host,
+        port: proxy.port,
+        source: 'remote',
+      }));
+  }, [proxySourceMode, proxyUuids, localProxyNodeNames, allProxies, localProxies]);
 
   // 加载代理列表（用于匹配）
   useEffect(() => {
@@ -87,10 +125,10 @@ export function NetworkLocationForm({
       .catch(() => {
         // 忽略错误
       });
-    listProxyChains()
-      .then(setProxyChains)
+    getLocalMihomoProxyRecords()
+      .then(setLocalProxies)
       .catch(() => {
-        setProxyChains([]);
+        // 忽略错误
       });
   }, []);
 
@@ -137,9 +175,10 @@ export function NetworkLocationForm({
         {selectedProxies.length > 0 ? (
           <div className="space-y-1">
             {selectedProxies.map((proxy) => (
-              <div key={proxy.uuid} className="flex items-center gap-1">
+              <div key={proxy.key} className="flex items-center gap-1">
                 <div className="flex-1 h-8 px-2 flex items-center text-xs bg-muted rounded overflow-hidden">
                   <span className="truncate">
+                    {proxy.source === 'local' ? `${proxy.name} · ` : ''}
                     {proxy.host}:{proxy.port}
                   </span>
                 </div>
@@ -149,7 +188,22 @@ export function NetworkLocationForm({
                   size="icon"
                   className="h-8 w-8 shrink-0"
                   onClick={() => {
-                    onProxyUuidsChange(proxyUuids.filter((uuid) => uuid !== proxy.uuid));
+                    if (proxy.source === 'local') {
+                      onProxySelectionChange({
+                        mode: 'local',
+                        remoteProxyUuids: [],
+                        localProxyNodeNames: localProxyNodeNames.filter(
+                          (nodeName) => nodeName !== proxy.key
+                        ),
+                      });
+                      return;
+                    }
+
+                    onProxySelectionChange({
+                      mode: 'remote',
+                      remoteProxyUuids: proxyUuids.filter((uuid) => uuid !== proxy.key),
+                      localProxyNodeNames: [],
+                    });
                   }}
                 >
                   <X className="h-3.5 w-3.5" />
@@ -160,37 +214,6 @@ export function NetworkLocationForm({
         ) : (
           <div className="h-8 px-3 flex items-center text-xs text-muted-foreground bg-muted rounded">
             {t('windowInfo.noProxy')}
-          </div>
-        )}
-      </div>
-
-      {/* 链式代理 */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <Label className="text-xs">链式代理</Label>
-          <span className="text-[10px] text-muted-foreground">多机场优选 → 落地 SOCKS5</span>
-        </div>
-        <select
-          className="h-8 w-full rounded-md border border-input bg-background px-3 text-xs outline-none focus:ring-2 focus:ring-ring"
-          value={proxyChainId || ''}
-          onChange={(event) => {
-            const value = event.target.value;
-            if (value) {
-              onProxyUuidsChange([]);
-            }
-            onProxyChainIdChange?.(value);
-          }}
-        >
-          <option value="">不使用链式代理</option>
-          {proxyChains.map((chain) => (
-            <option key={chain.id} value={chain.id}>
-              {chain.name} · {chain.landing_host || '未配置落地'}:{chain.landing_port || '-'}
-            </option>
-          ))}
-        </select>
-        {proxyChainId && (
-          <div className="text-[10px] text-amber-600">
-            已选择链式代理。启动窗口时会优先使用本地 Mihomo 入口，普通代理选择会被忽略。
           </div>
         )}
       </div>
@@ -258,11 +281,17 @@ export function NetworkLocationForm({
       {/* 代理设置抽屉 */}
       <CreateWindowProxyDrawer
         open={proxyDrawerOpen}
+        selectedProxyMode={proxySourceMode}
         selectedProxyUuids={proxyUuids}
+        selectedLocalProxyNodeNames={localProxyNodeNames}
         maxCount={createCount} // 传递最大数量限制
         onOpenChange={setProxyDrawerOpen}
-        onConfirm={(newProxyUuids) => {
-          onProxyUuidsChange(newProxyUuids);
+        onConfirm={({ mode, remoteProxyUuids, localProxyNodeNames: nextLocalProxyNodeNames }) => {
+          onProxySelectionChange({
+            mode,
+            remoteProxyUuids,
+            localProxyNodeNames: nextLocalProxyNodeNames,
+          });
         }}
       />
     </div>

@@ -4,14 +4,10 @@ import { toast } from 'sonner';
 import { invoke } from '@/lib/tauri';
 import {
   Loader2,
-  Check,
   Plus,
   Search,
-  Globe,
   Zap,
-  Shield,
   WifiOff,
-  Server,
   X,
   Activity,
   Trash2,
@@ -55,40 +51,36 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { AlertTriangle } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import type { ProxySourceMode } from '../types';
 // @ts-ignore - Cross-plugin import
 import {
   listProxies,
-  createProxy,
   deleteProxy,
   type ProxyItem,
 } from '../../../environment-manager/src/api';
+// @ts-ignore - Cross-plugin import
+import {
+  getLocalMihomoProxyRecords,
+  mapLocalMihomoProxyToProxyCandidate,
+  type EnvironmentProxyCandidate,
+} from '../../../environment-manager/src/utils';
 import { CreateWindowCreateProxyDialog } from './create-window-create-proxy-dialog';
 
 interface CreateWindowProxyDrawerProps {
   open: boolean;
-  selectedProxyUuids: string[]; // 已选中的代理 UUID 列表
-  maxCount?: number; // 最大选择数量（用于限制）
+  selectedProxyMode: ProxySourceMode;
+  selectedProxyUuids: string[];
+  selectedLocalProxyNodeNames: string[];
+  maxCount?: number;
   onOpenChange: (open: boolean) => void;
-  onConfirm: (proxyUuids: string[]) => void; // 返回选中的代理 UUID 列表
+  onConfirm: (value: {
+    mode: ProxySourceMode;
+    remoteProxyUuids: string[];
+    localProxyNodeNames: string[];
+  }) => void;
 }
 
-/**
- * 获取代理类型图标
- */
-const getProxyTypeIcon = (type: string) => {
-  switch (type.toLowerCase()) {
-    case 'socks5':
-      return Shield;
-    case 'ssh':
-      return Server;
-    default:
-      return Globe;
-  }
-};
-
-/**
- * 客户端代理检测状态
- */
 type ProxyTestStatus = 'untested' | 'testing' | 'healthy' | 'unhealthy';
 
 interface ProxyTestResult {
@@ -100,9 +92,8 @@ interface ProxyTestResult {
   error?: string;
 }
 
-/**
- * 获取状态样式
- */
+const LOCAL_PROXY_LOAD_FAILED = '加载本地代理失败';
+
 const getStatusStyle = (status: ProxyTestStatus, t: (key: string) => string) => {
   switch (status) {
     case 'healthy':
@@ -126,7 +117,7 @@ const getStatusStyle = (status: ProxyTestStatus, t: (key: string) => string) => 
         dot: 'bg-blue-500 animate-pulse',
         label: t('dialog.proxy.statusTesting') || '检测中',
       };
-    default: // untested
+    default:
       return {
         bg: 'bg-gray-500/15',
         text: 'text-gray-500',
@@ -136,121 +127,108 @@ const getStatusStyle = (status: ProxyTestStatus, t: (key: string) => string) => 
   }
 };
 
-const getProxyInfoText = (proxy: ProxyItem) => {
-  return `${proxy.host}:${proxy.port}`;
-};
+const getProxyInfoText = (proxy: EnvironmentProxyCandidate) =>
+  proxy.source === 'local' ? proxy.name : `${proxy.host}:${proxy.port}`;
 
-const getProxyCategoryText = (proxy: ProxyItem) => {
-  return (proxy.proxy_type || '-').toUpperCase();
-};
+const getProxyCategoryText = (proxy: EnvironmentProxyCandidate) =>
+  (proxy.proxy_type || '-').toUpperCase();
 
-const getProxyRemarkText = (proxy: ProxyItem) => {
-  if (proxy.remark) return proxy.remark;
-  if (proxy.country && proxy.city) return `${proxy.country} · ${proxy.city}`;
-  if (proxy.country) return proxy.country;
-  if (proxy.city) return proxy.city;
-  return '-';
-};
-
-const getAssociatedText = (proxy: ProxyItem) => {
+const getAssociatedText = (proxy: EnvironmentProxyCandidate) => {
   if (typeof proxy.environments_count === 'number') return String(proxy.environments_count);
   return '-';
 };
 
-/**
- * 空状态组件
- */
 const EmptyState: React.FC<{
-  t: (key: string) => string;
-}> = ({ t }) => (
+  title: string;
+  description: string;
+}> = ({ title, description }) => (
   <div className="flex flex-col items-center justify-center py-10 px-4">
     <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500/20 to-indigo-500/20 flex items-center justify-center mb-4">
       <WifiOff className="h-8 w-8 text-blue-500/60" />
     </div>
-    <h4 className="text-sm font-medium text-foreground mb-1">
-      {t('dialog.proxy.noProxies') || '暂无代理'}
-    </h4>
-    <p className="text-xs text-muted-foreground text-center max-w-[240px]">
-      {t('dialog.proxy.noProxiesDescription') || '创建代理以保护您的环境隐私并隐藏您的真实 IP 地址'}
-    </p>
+    <h4 className="text-sm font-medium text-foreground mb-1">{title}</h4>
+    <p className="text-xs text-muted-foreground text-center max-w-[240px]">{description}</p>
   </div>
 );
 
-/**
- * 创建窗口代理设置抽屉
- */
 export function CreateWindowProxyDrawer({
   open,
-  selectedProxyUuids: initialSelectedProxyUuids,
+  selectedProxyMode,
+  selectedProxyUuids,
+  selectedLocalProxyNodeNames,
   maxCount,
   onOpenChange,
   onConfirm,
 }: CreateWindowProxyDrawerProps) {
   const { t } = useTranslation('create-window');
 
-  // 代理列表
   const [proxies, setProxies] = useState<ProxyItem[]>([]);
   const [loadingProxies, setLoadingProxies] = useState(false);
+  const [localProxies, setLocalProxies] = useState<EnvironmentProxyCandidate[]>([]);
+  const [loadingLocalProxies, setLoadingLocalProxies] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [proxySourceMode, setProxySourceMode] = useState<ProxySourceMode>('remote');
 
-  // 客户端检测状态管理（key: proxy.uuid, value: 检测结果）
   const [proxyTestResults, setProxyTestResults] = useState<Map<string, ProxyTestResult>>(new Map());
-
-  // 选中的代理 UUID（使用 Set 以匹配 DataTable）
-  const [selectedProxyUuids, setSelectedProxyUuids] = useState<Set<string>>(new Set());
-  const [submitting, setSubmitting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [pageSize, setPageSize] = useState<number>(10);
   const [page, setPage] = useState<number>(1);
 
-  // 创建代理对话框状态
   const [createProxyDialogOpen, setCreateProxyDialogOpen] = useState(false);
-
-  // 删除确认对话框状态
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [proxyToDelete, setProxyToDelete] = useState<ProxyItem | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [testingSelected, setTestingSelected] = useState(false);
 
-  // 过滤后的代理列表
+  const remoteProxies = useMemo<EnvironmentProxyCandidate[]>(
+    () => proxies.map((proxy) => ({ ...proxy, source: 'remote' })),
+    [proxies]
+  );
+  const currentProxies = proxySourceMode === 'remote' ? remoteProxies : localProxies;
+  const currentLoading = proxySourceMode === 'remote' ? loadingProxies : loadingLocalProxies;
+
   const filteredProxies = useMemo(() => {
-    if (!searchQuery.trim()) return proxies;
+    if (!searchQuery.trim()) return currentProxies;
     const query = searchQuery.toLowerCase();
-    return proxies.filter(
+    return currentProxies.filter(
       (proxy) =>
         proxy.name.toLowerCase().includes(query) ||
         proxy.host.toLowerCase().includes(query) ||
         proxy.proxy_type.toLowerCase().includes(query) ||
         proxy.country?.toLowerCase().includes(query)
     );
-  }, [proxies, searchQuery]);
+  }, [currentProxies, searchQuery]);
 
-  const totalPages = useMemo(() => {
-    const total = filteredProxies.length;
-    return Math.max(1, Math.ceil(total / pageSize));
-  }, [filteredProxies.length, pageSize]);
-
+  const totalPages = useMemo(
+    () => Math.max(1, Math.ceil(filteredProxies.length / pageSize)),
+    [filteredProxies.length, pageSize]
+  );
   const currentPage = Math.min(page, totalPages);
-
   const pagedProxies = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
     return filteredProxies.slice(start, start + pageSize);
   }, [filteredProxies, currentPage, pageSize]);
 
-  // 加载代理列表
   useEffect(() => {
-    if (open) {
-      loadProxies();
-      setSearchQuery('');
-      setPage(1);
-      // 初始化已选中的代理
-      setSelectedProxyUuids(new Set(initialSelectedProxyUuids || []));
+    if (!open) {
+      return;
     }
-  }, [open, initialSelectedProxyUuids]);
+
+    setProxySourceMode(selectedProxyMode);
+    setSelectedIds(
+      new Set(selectedProxyMode === 'local' ? selectedLocalProxyNodeNames : selectedProxyUuids)
+    );
+    setSearchQuery('');
+    setPage(1);
+    void loadProxies();
+    void loadLocalProxies();
+  }, [open, selectedProxyMode, selectedProxyUuids, selectedLocalProxyNodeNames]);
 
   const loadProxies = async () => {
     setLoadingProxies(true);
     try {
-      const list = await listProxies();
-      setProxies(list);
+      setProxies(await listProxies());
     } catch (e) {
       toast.error(
         e instanceof Error ? e.message : t('dialog.proxy.loadFailed') || '加载代理列表失败'
@@ -260,27 +238,55 @@ export function CreateWindowProxyDrawer({
     }
   };
 
-  // 打开创建代理弹窗
-  const handleOpenCreateProxy = () => {
-    setCreateProxyDialogOpen(true);
+  const loadLocalProxies = async () => {
+    setLoadingLocalProxies(true);
+    setLocalError(null);
+    try {
+      const list = await getLocalMihomoProxyRecords();
+      setLocalProxies(list.map(mapLocalMihomoProxyToProxyCandidate));
+    } catch (e) {
+      setLocalProxies([]);
+      setLocalError(e instanceof Error ? e.message : LOCAL_PROXY_LOAD_FAILED);
+    } finally {
+      setLoadingLocalProxies(false);
+    }
   };
 
-  // 代理创建完成后的回调
-  const handleProxyCreated = () => {
-    loadProxies(); // 重新加载代理列表
+  const applySelectionLimit = (nextSelected: Set<string>) => {
+    if (maxCount === 1) {
+      if (nextSelected.size <= 1) {
+        setSelectedIds(nextSelected);
+        return;
+      }
+      const lastSelected = Array.from(nextSelected).pop();
+      setSelectedIds(new Set(lastSelected ? [lastSelected] : []));
+      return;
+    }
+
+    if (maxCount && maxCount > 1 && nextSelected.size > maxCount) {
+      toast.error(
+        t('dialog.proxy.maxCountExceeded') ||
+          `代理数量不可以超出实际创建的窗口数量（${maxCount}）`
+      );
+      setSelectedIds(new Set(Array.from(nextSelected).slice(0, maxCount)));
+      return;
+    }
+
+    setSelectedIds(nextSelected);
   };
 
-  // 确认选择
   const handleConfirm = () => {
-    const selected = Array.from(selectedProxyUuids);
-    onConfirm(selected);
+    const values = Array.from(selectedIds);
+    onConfirm({
+      mode: proxySourceMode,
+      remoteProxyUuids: proxySourceMode === 'remote' ? values : [],
+      localProxyNodeNames: proxySourceMode === 'local' ? values : [],
+    });
     onOpenChange(false);
   };
 
-  // 测试单个代理
-  const handleTestProxy = async (proxy: ProxyItem) => {
-    // 设置为检测中状态
-    setProxyTestResults(prev => new Map(prev).set(proxy.uuid, { status: 'testing' }));
+  const handleTestProxy = async (proxy: EnvironmentProxyCandidate) => {
+    setProxyTestResults((prev) => new Map(prev).set(proxy.uuid, { status: 'testing' }));
 
     try {
       const result = await invoke<{
@@ -294,76 +300,71 @@ export function CreateWindowProxyDrawer({
           host: proxy.host,
           port: proxy.port,
           username: proxy.username || null,
-          password: proxy.password
-            ? { value: proxy.password, encrypted: false }
-            : null,
+          password: proxy.password ? { value: proxy.password, encrypted: false } : null,
         },
       });
 
       if (result.success && result.ip_info) {
-        // 更新为健康状态
-        setProxyTestResults(prev => new Map(prev).set(proxy.uuid, {
-          status: 'healthy',
-          ip: result.ip_info!.ip,
-          country: result.ip_info!.country,
-          country_code: result.ip_info!.country_code,
-          latency: result.latency_ms,
-        }));
-      } else {
-        // 更新为不健康状态
-        setProxyTestResults(prev => new Map(prev).set(proxy.uuid, {
+        setProxyTestResults((prev) =>
+          new Map(prev).set(proxy.uuid, {
+            status: 'healthy',
+            ip: result.ip_info.ip,
+            country: result.ip_info.country,
+            country_code: result.ip_info.country_code,
+            latency: result.latency_ms,
+          })
+        );
+        return;
+      }
+
+      setProxyTestResults((prev) =>
+        new Map(prev).set(proxy.uuid, {
           status: 'unhealthy',
           error: result.error || '连接失败',
-        }));
-      }
+        })
+      );
     } catch (e) {
-      // 更新为不健康状态
       const errorMsg = e instanceof Error ? e.message : String(e);
-      setProxyTestResults(prev => new Map(prev).set(proxy.uuid, {
-        status: 'unhealthy',
-        error: errorMsg,
-      }));
+      setProxyTestResults((prev) =>
+        new Map(prev).set(proxy.uuid, {
+          status: 'unhealthy',
+          error: errorMsg,
+        })
+      );
     }
   };
 
-  // 批量测试选中的代理
-  const [testingSelected, setTestingSelected] = useState(false);
   const handleTestSelected = async () => {
-    if (selectedProxyUuids.size === 0) return;
-    const selectedProxies = proxies.filter(p => selectedProxyUuids.has(p.uuid));
+    if (selectedIds.size === 0) return;
+    const selectedProxies = currentProxies.filter((proxy) => selectedIds.has(proxy.uuid));
     if (selectedProxies.length === 0) return;
 
     setTestingSelected(true);
-    
     for (const proxy of selectedProxies) {
       await handleTestProxy(proxy);
     }
-    
     setTestingSelected(false);
   };
 
-  // 打开删除确认对话框
-  const handleDeleteProxy = (proxy: ProxyItem) => {
+  const handleDeleteProxy = (proxy: EnvironmentProxyCandidate) => {
+    if (proxy.source !== 'remote') return;
     setProxyToDelete(proxy);
     setDeleteDialogOpen(true);
   };
 
-  // 确认删除代理
   const handleConfirmDelete = async () => {
     if (!proxyToDelete) return;
 
     setDeleting(true);
     try {
       await deleteProxy({ uuid: proxyToDelete.uuid });
-      toast.success(t('dialog.proxy.deleteSuccess') || '删除代理成功');
-      // 从列表中移除已删除的代理
-      setProxies((prev) => prev.filter((p) => p.uuid !== proxyToDelete.uuid));
-      // 如果删除的代理在选中列表中，也要移除
-      const newSelected = new Set(selectedProxyUuids);
-      newSelected.delete(proxyToDelete.uuid);
-      setSelectedProxyUuids(newSelected);
+      setProxies((prev) => prev.filter((proxy) => proxy.uuid !== proxyToDelete.uuid));
+      const nextSelected = new Set(selectedIds);
+      nextSelected.delete(proxyToDelete.uuid);
+      setSelectedIds(nextSelected);
       setDeleteDialogOpen(false);
       setProxyToDelete(null);
+      toast.success(t('dialog.proxy.deleteSuccess') || '删除代理成功');
     } catch (e) {
       toast.error(
         e instanceof Error ? e.message : t('dialog.proxy.deleteFailed') || '删除代理失败'
@@ -373,18 +374,14 @@ export function CreateWindowProxyDrawer({
     }
   };
 
-  // 定义列配置
-  const columns: ColumnDef<ProxyItem>[] = useMemo(
+  const columns: ColumnDef<EnvironmentProxyCandidate>[] = useMemo(
     () => [
       {
         id: 'info',
         header: t('dialog.proxy.tableHeaderInfo') || '代理信息',
         cell: ({ row }) => {
-          // 使用本地检测状态，默认为未检测
           const testResult = proxyTestResults.get(row.uuid);
-          const status: ProxyTestStatus = testResult?.status || 'untested';
-          const statusStyle = getStatusStyle(status, t);
-          
+          const statusStyle = getStatusStyle(testResult?.status || 'untested', t);
           return (
             <div className="flex items-center gap-2">
               <div className="text-xs text-muted-foreground font-mono truncate">
@@ -395,15 +392,13 @@ export function CreateWindowProxyDrawer({
               >
                 <span className={`w-1.5 h-1.5 rounded-full ${statusStyle.dot}`} />
                 {statusStyle.label}
-                {testResult?.latency && (
-                  <span className="ml-1">{testResult.latency}ms</span>
-                )}
+                {testResult?.latency ? <span className="ml-1">{testResult.latency}ms</span> : null}
               </span>
-              {testResult?.status === 'healthy' && testResult.country && testResult.country_code && (
+              {testResult?.status === 'healthy' && testResult.country && testResult.country_code ? (
                 <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-600 dark:text-blue-400">
                   {testResult.country_code} | {testResult.country}
                 </span>
-              )}
+              ) : null}
             </div>
           );
         },
@@ -454,24 +449,26 @@ export function CreateWindowProxyDrawer({
                 <Activity className="h-4 w-4" />
               )}
             </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-destructive hover:text-destructive"
-              onClick={(e) => {
-                e.stopPropagation();
-                void handleDeleteProxy(row);
-              }}
-              title={t('dialog.proxy.delete') || '删除'}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+            {row.source === 'remote' ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-destructive hover:text-destructive"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleDeleteProxy(row);
+                }}
+                title={t('dialog.proxy.delete') || '删除'}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            ) : null}
           </div>
         ),
       },
     ],
-    [t, proxyTestResults]
+    [proxyTestResults, t]
   );
 
   const renderPageItems = () => {
@@ -493,25 +490,25 @@ export function CreateWindowProxyDrawer({
     return pages.map((it, idx) => {
       if (it === 'ellipsis') {
         return (
-          <PaginationItem key={`e-${idx}`}>
+          <PaginationItem key={`ellipsis-${idx}`}>
             <PaginationEllipsis />
           </PaginationItem>
         );
       }
-      const pageNum = it;
+
       return (
-        <PaginationItem key={pageNum}>
+        <PaginationItem key={it}>
           <PaginationLink
             href="#"
-            isActive={pageNum === currentPage}
+            isActive={it === currentPage}
             size="sm"
             className="h-7 w-7 text-xs"
             onClick={(e) => {
               e.preventDefault();
-              setPage(pageNum);
+              setPage(it);
             }}
           >
-            {pageNum}
+            {it}
           </PaginationLink>
         </PaginationItem>
       );
@@ -522,7 +519,6 @@ export function CreateWindowProxyDrawer({
     <>
       <Drawer open={open} direction="right" onOpenChange={onOpenChange}>
         <DrawerContent className="data-[vaul-drawer-direction=right]:sm:max-w-[48vw] my-auto mr-4 rounded-md max-w-[1100px] h-[96%] gap-0 p-0 overflow-hidden flex flex-col">
-          {/* 渐变头部 */}
           <div className="bg-gradient-to-r from-blue-500/10 via-indigo-500/10 to-blue-500/10 px-5 py-4 border-b border-border/50">
             <DrawerHeader className="space-y-1 p-0">
               <DrawerTitle className="text-base font-semibold flex items-center gap-2">
@@ -535,9 +531,46 @@ export function CreateWindowProxyDrawer({
             </DrawerHeader>
           </div>
 
-          {/* 内容区域 */}
           <div className="p-4 space-y-3 flex-1 min-h-0 overflow-hidden flex flex-col">
-            {/* 工具栏：搜索（左上角）+ 创建代理（右上角） */}
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2 rounded-xl bg-secondary p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProxySourceMode('remote');
+                    setSearchQuery('');
+                    setPage(1);
+                    setSelectedIds(new Set(selectedProxyUuids));
+                  }}
+                  className={cn(
+                    'rounded-xl px-3 py-1.5 text-xs transition-all duration-200',
+                    proxySourceMode === 'remote'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )}
+                >
+                  {t('dialog.proxy.modeRemote', { defaultValue: '代理' })}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProxySourceMode('local');
+                    setSearchQuery('');
+                    setPage(1);
+                    setSelectedIds(new Set(selectedLocalProxyNodeNames));
+                  }}
+                  className={cn(
+                    'rounded-xl px-3 py-1.5 text-xs transition-all duration-200',
+                    proxySourceMode === 'local'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )}
+                >
+                  {t('dialog.proxy.modeLocal', { defaultValue: '本地代理' })}
+                </button>
+              </div>
+            </div>
+
             <div className="flex items-center justify-between gap-2">
               <div className="relative group w-[320px]">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground transition-colors group-focus-within:text-primary" />
@@ -550,7 +583,7 @@ export function CreateWindowProxyDrawer({
                   }}
                   className="pl-9 pr-8 h-9 text-sm bg-muted/30 border-border/50 rounded-lg focus:bg-background focus:border-primary/50 focus:ring-2 focus:ring-primary/20 transition-all"
                 />
-                {searchQuery && (
+                {searchQuery ? (
                   <button
                     type="button"
                     onClick={() => {
@@ -561,32 +594,66 @@ export function CreateWindowProxyDrawer({
                   >
                     <X className="h-3.5 w-3.5" />
                   </button>
-                )}
+                ) : null}
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="text-xs"
-                onClick={handleOpenCreateProxy}
-              >
-                <Plus className="h-4 w-4 mr-1.5" />
-                {t('dialog.proxy.createNew') || '新建代理'}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9"
+                  onClick={handleTestSelected}
+                  disabled={selectedIds.size === 0 || testingSelected}
+                  title={t('dialog.proxy.testButton') || '检测'}
+                >
+                  {testingSelected ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Activity className="h-4 w-4" />
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="text-xs"
+                  onClick={() => setCreateProxyDialogOpen(true)}
+                  disabled={proxySourceMode === 'local'}
+                >
+                  <Plus className="h-4 w-4 mr-1.5" />
+                  {proxySourceMode === 'local'
+                    ? t('dialog.proxy.localManagedByMihomo', { defaultValue: '由 Mihomo 管理' })
+                    : t('dialog.proxy.createNew') || '新建代理'}
+                </Button>
+              </div>
             </div>
 
-            {/* 表格区域 */}
-            <div className="rounded-lg border border-border/50 overflow-hidden flex flex-col flex-1 min-h-0">
-              {proxies.length === 0 && !loadingProxies ? (
-                <div className="flex-1 flex items-center justify-center">
-                  <EmptyState t={t} />
-                </div>
-              ) : (
+            {currentProxies.length === 0 && !currentLoading ? (
+              <div className="rounded-lg border border-border/50 flex-1 min-h-0 flex items-center justify-center">
+                <EmptyState
+                  title={
+                    proxySourceMode === 'local'
+                      ? t('dialog.proxy.noLocalProxies', { defaultValue: '暂无本地代理' })
+                      : t('dialog.proxy.noProxies') || '暂无代理'
+                  }
+                  description={
+                    proxySourceMode === 'local'
+                      ? localError ||
+                        t('dialog.proxy.noLocalProxiesDescription', {
+                          defaultValue: '请先在 Mihomo 中选择并应用本地代理节点',
+                        })
+                      : t('dialog.proxy.noProxiesDescription') ||
+                        '创建代理以保护您的环境隐私并隐藏您的真实 IP 地址'
+                  }
+                />
+              </div>
+            ) : (
+              <div className="rounded-lg border border-border/50 overflow-hidden flex flex-col flex-1 min-h-0">
                 <DataTable
                   data={pagedProxies}
                   columns={columns}
                   getRowKey={(row) => row.uuid}
-                  loading={loadingProxies}
+                  loading={currentLoading}
                   skeletonRows={pageSize}
                   emptyText={
                     filteredProxies.length === 0
@@ -594,72 +661,26 @@ export function CreateWindowProxyDrawer({
                       : t('dialog.proxy.noProxies') || '暂无代理'
                   }
                   selectable={true}
-                  selectedIds={selectedProxyUuids}
+                  selectedIds={selectedIds}
                   onSelectionChange={(newSelected) => {
-                    // 处理数量限制
-                    if (maxCount === 1) {
-                      // 数量为1时，只保留最后一个
-                      if (newSelected.size > 1) {
-                        const lastSelected = Array.from(newSelected).pop();
-                        setSelectedProxyUuids(new Set(lastSelected ? [lastSelected] : []));
-                      } else {
-                        setSelectedProxyUuids(newSelected);
-                      }
-                    } else if (maxCount && maxCount > 1) {
-                      // 数量大于1时，检查是否超过限制
-                      if (newSelected.size > maxCount) {
-                        toast.error(
-                          t('dialog.proxy.maxCountExceeded') ||
-                            `代理数量不可以超出实际创建的窗口数量（${maxCount}）`
-                        );
-                        // 限制到最大数量
-                        const limited = Array.from(newSelected).slice(0, maxCount);
-                        setSelectedProxyUuids(new Set(limited));
-                      } else {
-                        setSelectedProxyUuids(newSelected);
-                      }
-                    } else {
-                      // 没有限制时，直接设置
-                      setSelectedProxyUuids(newSelected);
-                    }
+                    applySelectionLimit(newSelected);
                   }}
                   onRowClick={(row) => {
-                    const newSelected = new Set(selectedProxyUuids);
-                    if (newSelected.has(row.uuid)) {
-                      // 取消选择
-                      newSelected.delete(row.uuid);
-                      setSelectedProxyUuids(newSelected);
+                    const nextSelected = new Set(selectedIds);
+                    if (nextSelected.has(row.uuid)) {
+                      nextSelected.delete(row.uuid);
                     } else {
-                      // 选择新代理
-                      if (maxCount === 1) {
-                        // 数量为1时，取消已选择的，选择新的
-                        setSelectedProxyUuids(new Set([row.uuid]));
-                      } else if (maxCount && maxCount > 1) {
-                        // 数量大于1时，检查是否超过限制
-                        if (newSelected.size >= maxCount) {
-                          toast.error(
-                            t('dialog.proxy.maxCountExceeded') ||
-                              `代理数量不可以超出实际创建的窗口数量（${maxCount}）`
-                          );
-                          return;
-                        }
-                        newSelected.add(row.uuid);
-                        setSelectedProxyUuids(newSelected);
-                      } else {
-                        // 没有限制时，直接添加
-                        newSelected.add(row.uuid);
-                        setSelectedProxyUuids(newSelected);
-                      }
+                      nextSelected.add(row.uuid);
                     }
+                    applySelectionLimit(nextSelected);
                   }}
                   stickyRightColumns={['actions']}
                   className="m-0 border-0 rounded-none flex-1 min-h-0 [&_td]:py-2 [&_th]:py-3 [&_tbody_tr:last-child]:border-b-0 [&_tbody_tr:last-child_td]:border-b-0 [&_tbody_tr:last-child_td:first-child]:border-b-0"
                   tableClassName="min-w-full"
                 />
-              )}
-            </div>
+              </div>
+            )}
 
-            {/* 分页：底部 */}
             <div className="flex items-center justify-between px-3 py-2 bg-muted/30 border border-border/50 rounded-lg">
               <div className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground whitespace-nowrap">
@@ -669,8 +690,8 @@ export function CreateWindowProxyDrawer({
                 </span>
                 <Select
                   value={String(pageSize)}
-                  onValueChange={(v) => {
-                    setPageSize(Number(v));
+                  onValueChange={(value) => {
+                    setPageSize(Number(value));
                     setPage(1);
                   }}
                 >
@@ -678,9 +699,9 @@ export function CreateWindowProxyDrawer({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {[10, 20, 50, 100].map((n) => (
-                      <SelectItem key={n} value={String(n)}>
-                        {n} {t('dialog.proxy.itemsPerPage') || '项/页'}
+                    {[10, 20, 50, 100].map((size) => (
+                      <SelectItem key={size} value={String(size)}>
+                        {size} {t('dialog.proxy.itemsPerPage') || '项/页'}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -695,7 +716,7 @@ export function CreateWindowProxyDrawer({
                       className="h-7 px-2 text-xs gap-1"
                       onClick={(e) => {
                         e.preventDefault();
-                        setPage((p) => Math.max(1, p - 1));
+                        setPage((prev) => Math.max(1, prev - 1));
                       }}
                       aria-label={t('dialog.proxy.previous') || '上一页'}
                       aria-disabled={currentPage === 1}
@@ -714,7 +735,7 @@ export function CreateWindowProxyDrawer({
                       className="h-7 px-2 text-xs gap-1"
                       onClick={(e) => {
                         e.preventDefault();
-                        setPage((p) => Math.min(totalPages, p + 1));
+                        setPage((prev) => Math.min(totalPages, prev + 1));
                       }}
                       aria-label={t('dialog.proxy.next') || '下一页'}
                       aria-disabled={currentPage === totalPages}
@@ -728,7 +749,6 @@ export function CreateWindowProxyDrawer({
             </div>
           </div>
 
-          {/* 底部操作栏 */}
           <DrawerFooter className="px-5 py-3 bg-muted/30 border-t border-border/50 gap-2 flex-row items-center justify-end">
             <div className="flex items-center gap-2">
               <Button
@@ -743,30 +763,23 @@ export function CreateWindowProxyDrawer({
                 size="sm"
                 className="text-xs bg-primary text-primary-foreground hover:bg-primary/90 border-0"
                 onClick={handleConfirm}
-                disabled={submitting || selectedProxyUuids.size === 0}
+                disabled={selectedIds.size === 0}
               >
-                {submitting ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                    {t('dialog.proxy.saving') || '保存中...'}
-                  </>
-                ) : (
-                  t('dialog.proxy.confirm') || '确认'
-                )}
+                {t('dialog.proxy.confirm') || '确认'}
               </Button>
             </div>
           </DrawerFooter>
         </DrawerContent>
       </Drawer>
 
-      {/* 创建代理对话框 */}
       <CreateWindowCreateProxyDialog
         open={createProxyDialogOpen}
         onOpenChange={setCreateProxyDialogOpen}
-        onComplete={handleProxyCreated}
+        onComplete={() => {
+          void loadProxies();
+        }}
       />
 
-      {/* 删除确认对话框 */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent className="gap-0 p-3">
           <AlertDialogHeader className="mb-3">
@@ -775,11 +788,12 @@ export function CreateWindowProxyDrawer({
               {t('dialog.proxy.deleteTitle') || '删除代理'}
             </AlertDialogTitle>
             <AlertDialogDescription className="text-[10px] text-muted-foreground mt-0.5 mb-0">
-              {proxyToDelete &&
-                (t('dialog.proxy.deleteDescription', {
-                  name: proxyToDelete.name || `${proxyToDelete.host}:${proxyToDelete.port}`,
-                }) ||
-                  `确定要删除代理 "${proxyToDelete.name || `${proxyToDelete.host}:${proxyToDelete.port}`}" 吗？`)}
+              {proxyToDelete
+                ? t('dialog.proxy.deleteDescription', {
+                    name: proxyToDelete.name || `${proxyToDelete.host}:${proxyToDelete.port}`,
+                  }) ||
+                  `确定要删除代理 "${proxyToDelete.name || `${proxyToDelete.host}:${proxyToDelete.port}`}" 吗？`
+                : null}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <Alert className="border-destructive/50 bg-destructive/10 mb-3 px-3 py-2">

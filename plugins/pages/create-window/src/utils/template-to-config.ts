@@ -102,7 +102,9 @@ export function transformTemplateToWindowConfig(
       kernel: (windowInfo.kernel as string) || template.kernel_info || 'Chrome',
       userAgent: (windowInfo.userAgent as string) || '',
       searchEngine: (windowInfo.searchEngine as string) || 'Google',
+      proxySourceMode: 'remote',
       proxyUuids,
+      localProxyNodeNames: [],
       accountUuids,
       urls,
       cookies,
@@ -201,8 +203,6 @@ export function transformTemplateToWindowConfig(
     projectMetadata: {
       defaultProject: (projectMetadata.defaultProject as string) || '',
       tags: (projectMetadata.tags as string[]) || [],
-      proxyChainId:
-        (projectMetadata.proxyChainId as string) || (projectMetadata.proxy_chain_id as string) || '',
     },
   };
 }

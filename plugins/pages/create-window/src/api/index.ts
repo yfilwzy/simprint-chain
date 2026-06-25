@@ -76,14 +76,6 @@ function buildWindowInfoPayload(config: WindowConfig['windowInfo']) {
   };
 }
 
-function buildProjectMetadataPayload(config: WindowConfig['projectMetadata']) {
-  return {
-    defaultProject: config.defaultProject,
-    tags: config.tags,
-    ...(config.proxyChainId?.trim() ? { proxyChainId: config.proxyChainId.trim() } : {}),
-  };
-}
-
 function buildTemplateEnvironmentData(
   config: WindowConfig,
   name: string,
@@ -156,7 +148,7 @@ function buildTemplateEnvironmentData(
       fingerprint_settings: config.advancedFingerprintSettings,
       device_settings: config.deviceSettings,
       preference_settings: config.preferenceSettings,
-      project_metadata: buildProjectMetadataPayload(config.projectMetadata),
+      project_metadata: config.projectMetadata,
       created_at: now,
       updated_at: now,
     },
@@ -250,7 +242,7 @@ export async function listBrowserKernels(
  */
 export function transformWindowConfigToRequest(
   config: WindowConfig,
-  options: CreateEnvironmentOptions = {}
+  options: CreateEnvironmentOptions
 ): CreateEnvironmentRequest {
   return {
     name: config.windowInfo.name || '新窗口',
@@ -336,7 +328,10 @@ export function transformWindowConfigToRequest(
         urlBlacklist: config.preferenceSettings.urlBlacklist,
         urlWhitelist: config.preferenceSettings.urlWhitelist,
       },
-      project_metadata: buildProjectMetadataPayload(config.projectMetadata),
+      project_metadata: {
+        defaultProject: config.projectMetadata.defaultProject,
+        tags: config.projectMetadata.tags,
+      },
     },
   };
 }

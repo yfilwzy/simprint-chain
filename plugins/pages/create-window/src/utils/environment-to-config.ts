@@ -49,7 +49,9 @@ export function transformEnvironmentConfigToWindowConfig(
       kernel: (windowInfo.kernel as string) || 'Chrome',
       userAgent: (windowInfo.userAgent as string) || '',
       searchEngine: (windowInfo.searchEngine as string) || 'Google',
+      proxySourceMode: 'remote',
       proxyUuids, // 代理 UUID 从 detail.proxy 中获取，转换为数组
+      localProxyNodeNames: [],
       accountUuids: (detail.accounts || []).map((acc) => acc.uuid), // 账号 UUID 列表从 detail.accounts 中获取
       urls,
       cookies,
@@ -148,8 +150,6 @@ export function transformEnvironmentConfigToWindowConfig(
     projectMetadata: {
       defaultProject: (projectMetadata.defaultProject as string) || '',
       tags: (projectMetadata.tags as string[]) || [],
-      proxyChainId:
-        (projectMetadata.proxyChainId as string) || (projectMetadata.proxy_chain_id as string) || '',
     },
   };
 }

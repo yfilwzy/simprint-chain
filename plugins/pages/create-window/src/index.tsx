@@ -12,6 +12,8 @@ import { transformEnvironmentConfigToWindowConfig } from './utils/environment-to
 // @ts-ignore - Cross-plugin import
 import { getTemplate } from '../../system-settings/src/api/templates';
 import { transformTemplateToWindowConfig } from './utils/template-to-config';
+// @ts-ignore - Cross-plugin import
+import { getEnvironmentLocalProxyBindings } from '../../../services/store/src';
 
 const CreateWindowPage: React.FC = () => {
   useTranslation('create-window'); // 注册 i18n namespace
@@ -39,8 +41,17 @@ const CreateWindowPage: React.FC = () => {
   const loadEnvironmentForEdit = async (uuid: string) => {
     setLoading(true);
     try {
-      const detail = await getEnvironment({ uuid });
+      const [detail, localBindings] = await Promise.all([
+        getEnvironment({ uuid }),
+        getEnvironmentLocalProxyBindings().catch(() => ({})),
+      ]);
       const config = transformEnvironmentConfigToWindowConfig(detail);
+      const localBinding = localBindings[uuid];
+      if (localBinding) {
+        config.windowInfo.proxySourceMode = 'local';
+        config.windowInfo.proxyUuids = [];
+        config.windowInfo.localProxyNodeNames = [localBinding.node_name];
+      }
       setWindowConfig(config);
 
       // 设置分组和标签（从 detail 中获取，因为后端现在直接返回完整对象）

@@ -2,8 +2,18 @@ import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@/lib/tauri';
 import type { Environment, GroupItem, TagItem } from '../types';
 import { listEnvironments, listRecycleBin, listGroups, listTags } from '../api';
-import { useRefreshStore } from '../../../../services/store/src';
+import {
+  getEnvironmentLocalProxyBindings,
+  type EnvironmentLocalProxyBindingMap,
+  useRefreshStore,
+} from '../../../../services/store/src';
 import type { EnvironmentViewType } from '../stores/filters-store';
+import {
+  buildMissingLocalProxySummary,
+  getLocalMihomoProxyRecords,
+  mapLocalMihomoProxyToProxySummary,
+  type MihomoLocalProxyRecord,
+} from '../utils';
 
 interface UseEnvironmentsReturn {
   environments: Environment[];
@@ -22,6 +32,33 @@ interface UseEnvironmentsParams {
   keyword?: string;
   tagUuids?: string[];
   viewType?: EnvironmentViewType;
+}
+
+function applyLocalProxyBindings(
+  environments: Environment[],
+  bindings: EnvironmentLocalProxyBindingMap,
+  localProxies: MihomoLocalProxyRecord[]
+): Environment[] {
+  if (environments.length === 0) {
+    return environments;
+  }
+
+  const localProxyMap = new Map(localProxies.map((proxy) => [proxy.node_name, proxy]));
+
+  return environments.map((environment) => {
+    const binding = bindings[environment.uuid];
+    if (!binding) {
+      return environment;
+    }
+
+    const localProxy = localProxyMap.get(binding.node_name);
+    return {
+      ...environment,
+      proxy: localProxy
+        ? mapLocalMihomoProxyToProxySummary(localProxy)
+        : buildMissingLocalProxySummary(binding.node_name),
+    };
+  });
 }
 
 /**
@@ -52,7 +89,11 @@ export function useEnvironments({ page, pageSize, groupUuid, keyword, tagUuids, 
         page_size: pageSize,
         filters: Object.keys(filters).length > 0 ? filters : undefined,
       });
-      setEnvironments(response.items ?? []);
+      const [bindings, localProxies] = await Promise.all([
+        getEnvironmentLocalProxyBindings().catch(() => ({})),
+        getLocalMihomoProxyRecords().catch(() => []),
+      ]);
+      setEnvironments(applyLocalProxyBindings(response.items ?? [], bindings, localProxies));
       setTotal(response.total ?? 0);
     } catch (e) {
       setError(e instanceof Error ? e.message : '未知错误');
@@ -89,7 +130,8 @@ export function useEnvironments({ page, pageSize, groupUuid, keyword, tagUuids, 
       try {
         // 已打开视图：从 Tauri 获取运行中的环境 ID，然后在客户端过滤
         if (viewType === 'opened') {
-          const [connectedEnvIds, allEnvsData, groupsData, tagsData] = await Promise.all([
+          const [connectedEnvIds, allEnvsData, groupsData, tagsData, bindings, localProxies] =
+            await Promise.all([
             invoke<string[]>('get_connected_environments').catch(() => []),
             listEnvironments({
               page: 1,
@@ -98,12 +140,18 @@ export function useEnvironments({ page, pageSize, groupUuid, keyword, tagUuids, 
             }),
             listGroups().catch(() => []),
             listTags().catch(() => []),
+            getEnvironmentLocalProxyBindings().catch(() => ({})),
+            getLocalMihomoProxyRecords().catch(() => []),
           ]);
 
           if (!cancelled) {
             // 过滤出运行中的环境
-            const connectedEnvs = (allEnvsData.items ?? []).filter((env) =>
+            const connectedEnvs = applyLocalProxyBindings(
+              (allEnvsData.items ?? []).filter((env) =>
               connectedEnvIds.includes(env.uuid)
+              ),
+              bindings,
+              localProxies
             );
 
             // 客户端分页
@@ -126,7 +174,7 @@ export function useEnvironments({ page, pageSize, groupUuid, keyword, tagUuids, 
         if (tagUuids && tagUuids.length > 0) filters.tag_uuids = tagUuids;
 
         const apiCall = viewType === 'trash' ? listRecycleBin : listEnvironments;
-        const [envsData, groupsData, tagsData] = await Promise.all([
+        const [envsData, groupsData, tagsData, bindings, localProxies] = await Promise.all([
           apiCall({
             page,
             page_size: pageSize,
@@ -134,10 +182,12 @@ export function useEnvironments({ page, pageSize, groupUuid, keyword, tagUuids, 
           }),
           listGroups().catch(() => []),
           listTags().catch(() => []),
+          getEnvironmentLocalProxyBindings().catch(() => ({})),
+          getLocalMihomoProxyRecords().catch(() => []),
         ]);
 
         if (!cancelled) {
-          setEnvironments(envsData.items ?? []);
+          setEnvironments(applyLocalProxyBindings(envsData.items ?? [], bindings, localProxies));
           setTotal(envsData.total ?? 0);
           setGroups(groupsData ?? []);
           setTags(tagsData ?? []);

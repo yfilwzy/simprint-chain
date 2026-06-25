@@ -26,6 +26,8 @@ export interface BrowserScriptResult {
 export interface BrowserAdapter {
   connect(session: BrowserSession): Promise<void>;
   goto(url: string, options?: { waitUntil?: string }): Promise<void>;
+  selectTab(index: number): Promise<void>;
+  closeTab(index: number): Promise<void>;
   screenshot(options?: { fullPage?: boolean; target?: RpaWorkflowSelector }): Promise<string>;
   click(target: RpaWorkflowSelector): Promise<void>;
   captureClickTarget(timeoutMs?: number): Promise<RpaCapturedSelector>;

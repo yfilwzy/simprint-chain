@@ -2,13 +2,12 @@ import { useMemo, useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { invoke } from '@/lib/tauri';
+import { cn } from '@/lib/utils';
 import {
   Loader2,
   Plus,
   Search,
-  Globe,
   Zap,
-  Shield,
   WifiOff,
   X,
   Activity,
@@ -44,28 +43,26 @@ import { DataTable, type ColumnDef } from '@/components/data-table';
 import { FormattedDialog, FormattedDialogFooter } from '@/components/formatted-dialog';
 import { useEnvironmentDialogStore, useRunningEnvsStore } from '../stores';
 import {
-  setEnvironmentProxy,
   listProxies,
   deleteProxy,
   refreshEnvironmentProxy,
   ProxyItem,
+  setEnvironmentProxy,
 } from '../api';
+import {
+  getEnvironmentLocalProxyBindings,
+  removeEnvironmentLocalProxyBinding,
+  setEnvironmentLocalProxyBinding,
+} from '../../../../services/store/src';
+import {
+  getLocalMihomoProxyRecords,
+  mapLocalMihomoProxyToProxyCandidate,
+  type EnvironmentProxyCandidate,
+} from '../utils';
 
 interface EnvironmentSelectProxyDialogProps {
   onComplete?: () => void;
 }
-
-/**
- * 获取代理类型图标
- */
-const getProxyTypeIcon = (type: string) => {
-  switch (type.toLowerCase()) {
-    case 'socks5':
-      return Shield;
-    default:
-      return Globe;
-  }
-};
 
 /**
  * 客户端代理检测状态
@@ -117,17 +114,17 @@ const getStatusStyle = (status: ProxyTestStatus, t: (key: string) => string) => 
   }
 };
 
-const getProxyInfoText = (proxy: ProxyItem) => {
-  // 仅显示主机 + 端口，类型信息放在分类列中
-  return `${proxy.host}:${proxy.port}`;
+const getProxyInfoText = (proxy: EnvironmentProxyCandidate) => {
+  // 本地代理优先显示节点名，远程代理显示 host:port
+  return proxy.source === 'local' ? proxy.name : `${proxy.host}:${proxy.port}`;
 };
 
-const getProxyCategoryText = (proxy: ProxyItem) => {
+const getProxyCategoryText = (proxy: EnvironmentProxyCandidate) => {
   // 分类优先用 proxy_type，保持简洁大写
   return (proxy.proxy_type || '-').toUpperCase();
 };
 
-const getProxyRemarkText = (proxy: ProxyItem) => {
+const getProxyRemarkText = (proxy: EnvironmentProxyCandidate) => {
   if (proxy.remark) return proxy.remark;
   if (proxy.country && proxy.city) return `${proxy.country} · ${proxy.city}`;
   if (proxy.country) return proxy.country;
@@ -135,7 +132,7 @@ const getProxyRemarkText = (proxy: ProxyItem) => {
   return '-';
 };
 
-const getAssociatedText = (proxy: ProxyItem) => {
+const getAssociatedText = (proxy: EnvironmentProxyCandidate) => {
   if (typeof proxy.environments_count === 'number') return String(proxy.environments_count);
   return '-';
 };
@@ -144,19 +141,22 @@ const createSingleSelection = (proxyUuid?: string) => {
   return proxyUuid ? new Set([proxyUuid]) : new Set<string>();
 };
 
+const LOCAL_PROXY_LOAD_FAILED = '加载本地代理失败';
+
 /**
  * 空状态组件
  */
 const EmptyState: React.FC<{
-  t: (key: string) => string;
-}> = ({ t }) => (
+  title: string;
+  description: string;
+}> = ({ title, description }) => (
   <div className="flex flex-col items-center justify-center py-10 px-4">
     <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500/20 to-indigo-500/20 flex items-center justify-center mb-4">
       <WifiOff className="h-8 w-8 text-blue-500/60" />
     </div>
-    <h4 className="text-sm font-medium text-foreground mb-1">{t('dialog.proxy.noProxies')}</h4>
+    <h4 className="text-sm font-medium text-foreground mb-1">{title}</h4>
     <p className="text-xs text-muted-foreground text-center max-w-[240px]">
-      {t('dialog.proxy.noProxiesDescription')}
+      {description}
     </p>
   </div>
 );
@@ -172,14 +172,21 @@ export function EnvironmentSelectProxyDialog({ onComplete }: EnvironmentSelectPr
   // 代理列表
   const [proxies, setProxies] = useState<ProxyItem[]>([]);
   const [loadingProxies, setLoadingProxies] = useState(false);
+  const [localProxies, setLocalProxies] = useState<EnvironmentProxyCandidate[]>([]);
+  const [loadingLocalProxies, setLoadingLocalProxies] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [proxySourceMode, setProxySourceMode] = useState<'remote' | 'local'>('remote');
 
   // 客户端检测状态管理（key: proxy.uuid, value: 检测结果）
   const [proxyTestResults, setProxyTestResults] = useState<Map<string, ProxyTestResult>>(new Map());
 
   // 选中的代理 UUID（使用 Set 以匹配 DataTable）
   const [selectedProxyUuids, setSelectedProxyUuids] = useState<Set<string>>(new Set());
-  const [initialProxyUuid, setInitialProxyUuid] = useState<string | undefined>(undefined);
+  const [initialSelection, setInitialSelection] = useState<{
+    mode: 'remote' | 'local' | null;
+    key?: string;
+  }>({ mode: null });
   const [submitting, setSubmitting] = useState(false);
   const [pageSize, setPageSize] = useState<number>(10);
   const [page, setPage] = useState<number>(1);
@@ -189,18 +196,25 @@ export function EnvironmentSelectProxyDialog({ onComplete }: EnvironmentSelectPr
   const [proxyToDelete, setProxyToDelete] = useState<ProxyItem | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  const remoteProxies = useMemo<EnvironmentProxyCandidate[]>(
+    () => proxies.map((proxy) => ({ ...proxy, source: 'remote' })),
+    [proxies]
+  );
+  const currentProxies = proxySourceMode === 'remote' ? remoteProxies : localProxies;
+  const currentLoading = proxySourceMode === 'remote' ? loadingProxies : loadingLocalProxies;
+
   // 过滤后的代理列表
   const filteredProxies = useMemo(() => {
-    if (!searchQuery.trim()) return proxies;
+    if (!searchQuery.trim()) return currentProxies;
     const query = searchQuery.toLowerCase();
-    return proxies.filter(
+    return currentProxies.filter(
       (proxy) =>
         proxy.name.toLowerCase().includes(query) ||
         proxy.host.toLowerCase().includes(query) ||
         proxy.proxy_type.toLowerCase().includes(query) ||
         proxy.country?.toLowerCase().includes(query)
     );
-  }, [proxies, searchQuery]);
+  }, [currentProxies, searchQuery]);
 
   const totalPages = useMemo(() => {
     const total = filteredProxies.length;
@@ -216,11 +230,15 @@ export function EnvironmentSelectProxyDialog({ onComplete }: EnvironmentSelectPr
 
   const selectedSingleProxyUuid =
     selectedProxyUuids.size === 1 ? Array.from(selectedProxyUuids)[0] : '';
+  const canSaveSelection =
+    selectedProxyUuids.size === 1 &&
+    currentProxies.some((proxy) => proxy.uuid === selectedSingleProxyUuid);
 
   // 加载代理列表
   useEffect(() => {
     if (dialogStore.selectProxyDialogOpen) {
-      loadProxies();
+      void loadProxies();
+      void loadLocalProxies();
       setSearchQuery('');
       setPage(1);
     }
@@ -228,14 +246,43 @@ export function EnvironmentSelectProxyDialog({ onComplete }: EnvironmentSelectPr
 
   // 当环境变化时，设置当前代理
   useEffect(() => {
-    if (dialogStore.selectProxyEnvironment?.proxy) {
-      setInitialProxyUuid(dialogStore.selectProxyEnvironment.proxy.uuid);
-      setSelectedProxyUuids(createSingleSelection(dialogStore.selectProxyEnvironment.proxy.uuid));
-    } else {
-      setInitialProxyUuid(undefined);
-      setSelectedProxyUuids(createSingleSelection());
-    }
-  }, [dialogStore.selectProxyEnvironment]);
+    let cancelled = false;
+
+    const syncSelection = async () => {
+      const environment = dialogStore.selectProxyEnvironment;
+      if (!environment || !dialogStore.selectProxyDialogOpen) {
+        setInitialSelection({ mode: null });
+        setSelectedProxyUuids(createSingleSelection());
+        setProxySourceMode('remote');
+        return;
+      }
+
+      const bindings = await getEnvironmentLocalProxyBindings().catch(() => ({}));
+      if (cancelled) {
+        return;
+      }
+
+      const binding = bindings[environment.uuid];
+      if (binding) {
+        setProxySourceMode('local');
+        setInitialSelection({ mode: 'local', key: binding.node_name });
+        setSelectedProxyUuids(createSingleSelection(binding.node_name));
+        return;
+      }
+
+      const remoteProxyUuid =
+        environment.proxy?.source === 'local' ? undefined : environment.proxy?.uuid;
+      setProxySourceMode('remote');
+      setInitialSelection({ mode: 'remote', key: remoteProxyUuid });
+      setSelectedProxyUuids(createSingleSelection(remoteProxyUuid));
+    };
+
+    void syncSelection();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [dialogStore.selectProxyDialogOpen, dialogStore.selectProxyEnvironment]);
 
   const loadProxies = async () => {
     setLoadingProxies(true);
@@ -246,6 +293,20 @@ export function EnvironmentSelectProxyDialog({ onComplete }: EnvironmentSelectPr
       toast.error(e instanceof Error ? e.message : t('dialog.proxy.loadFailed'));
     } finally {
       setLoadingProxies(false);
+    }
+  };
+
+  const loadLocalProxies = async () => {
+    setLoadingLocalProxies(true);
+    setLocalError(null);
+    try {
+      const list = await getLocalMihomoProxyRecords();
+      setLocalProxies(list.map(mapLocalMihomoProxyToProxyCandidate));
+    } catch (e) {
+      setLocalProxies([]);
+      setLocalError(e instanceof Error ? e.message : LOCAL_PROXY_LOAD_FAILED);
+    } finally {
+      setLoadingLocalProxies(false);
     }
   };
 
@@ -265,15 +326,28 @@ export function EnvironmentSelectProxyDialog({ onComplete }: EnvironmentSelectPr
     }
 
     const nextProxyUuid = selectedSingleProxyUuid || undefined;
-    const proxyChanged = initialProxyUuid !== nextProxyUuid;
-    const nextProxy = proxies.find((proxy) => proxy.uuid === nextProxyUuid);
+    const proxyChanged =
+      initialSelection.mode !== proxySourceMode || initialSelection.key !== nextProxyUuid;
+    const nextProxy = currentProxies.find((proxy) => proxy.uuid === nextProxyUuid);
 
     setSubmitting(true);
     try {
-      await setEnvironmentProxy({
-        uuid: environment.uuid,
-        proxy_uuid: nextProxyUuid,
-      });
+      if (proxySourceMode === 'local') {
+        const localNodeName = nextProxy?.node_name ?? nextProxy?.uuid;
+        if (!localNodeName || !nextProxy) {
+          toast.warning(t('dialog.proxy.selectRequired'));
+          return;
+        }
+
+        await setEnvironmentLocalProxyBinding(environment.uuid, localNodeName);
+      } else {
+        await removeEnvironmentLocalProxyBinding(environment.uuid);
+        await setEnvironmentProxy({
+          uuid: environment.uuid,
+          proxy_uuid: nextProxyUuid,
+        });
+      }
+
       if (proxyChanged && runningEnvsStore.isRunning(environment.uuid)) {
         await refreshEnvironmentProxy(environment.uuid, nextProxy ?? null);
       }
@@ -291,7 +365,7 @@ export function EnvironmentSelectProxyDialog({ onComplete }: EnvironmentSelectPr
     dialogStore.selectProxyEnvironment?.name || t('dialog.proxy.defaultEnvName');
 
   // 测试单个代理
-  const handleTestProxy = async (proxy: ProxyItem) => {
+  const handleTestProxy = async (proxy: EnvironmentProxyCandidate) => {
     // 设置为检测中状态
     setProxyTestResults(prev => new Map(prev).set(proxy.uuid, { status: 'testing' }));
 
@@ -343,7 +417,7 @@ export function EnvironmentSelectProxyDialog({ onComplete }: EnvironmentSelectPr
   const [testingSelected, setTestingSelected] = useState(false);
   const handleTestSelected = async () => {
     if (selectedProxyUuids.size === 0) return;
-    const selectedProxies = proxies.filter(p => selectedProxyUuids.has(p.uuid));
+    const selectedProxies = currentProxies.filter(p => selectedProxyUuids.has(p.uuid));
     if (selectedProxies.length === 0) return;
 
     setTestingSelected(true);
@@ -356,7 +430,10 @@ export function EnvironmentSelectProxyDialog({ onComplete }: EnvironmentSelectPr
   };
 
   // 打开删除确认对话框
-  const handleDeleteProxy = (proxy: ProxyItem) => {
+  const handleDeleteProxy = (proxy: EnvironmentProxyCandidate) => {
+    if (proxy.source !== 'remote') {
+      return;
+    }
     setProxyToDelete(proxy);
     setDeleteDialogOpen(true);
   };
@@ -387,7 +464,7 @@ export function EnvironmentSelectProxyDialog({ onComplete }: EnvironmentSelectPr
   };
 
   // 定义列配置
-  const columns: ColumnDef<ProxyItem>[] = useMemo(
+  const columns: ColumnDef<EnvironmentProxyCandidate>[] = useMemo(
     () => [
       {
         id: 'info',
@@ -426,9 +503,9 @@ export function EnvironmentSelectProxyDialog({ onComplete }: EnvironmentSelectPr
         header: t('dialog.proxy.tableHeaderCategory'),
         width: 96,
         cell: ({ row }) => (
-          <span className="text-[10px] font-semibold text-muted-foreground">
-            {getProxyCategoryText(row)}
-          </span>
+              <span className="text-[10px] font-semibold text-muted-foreground">
+                {getProxyCategoryText(row)}
+              </span>
         ),
       },
       {
@@ -467,19 +544,21 @@ export function EnvironmentSelectProxyDialog({ onComplete }: EnvironmentSelectPr
                 <Activity className="h-4 w-4" />
               )}
             </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-destructive hover:text-destructive"
-              onClick={(e) => {
-                e.stopPropagation();
-                void handleDeleteProxy(row);
-              }}
-              title={t('dialog.proxy.delete')}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
+            {row.source === 'remote' && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-destructive hover:text-destructive"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleDeleteProxy(row);
+                }}
+                title={t('dialog.proxy.delete')}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            )}
           </div>
         ),
       },
@@ -559,6 +638,52 @@ export function EnvironmentSelectProxyDialog({ onComplete }: EnvironmentSelectPr
 
           {/* 内容区域 */}
           <div className="p-4 space-y-3 flex-1 min-h-0 overflow-hidden flex flex-col">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2 rounded-xl bg-secondary p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProxySourceMode('remote');
+                    setSearchQuery('');
+                    setPage(1);
+                    setSelectedProxyUuids(
+                      initialSelection.mode === 'remote'
+                        ? createSingleSelection(initialSelection.key)
+                        : createSingleSelection()
+                    );
+                  }}
+                  className={cn(
+                    'rounded-xl px-3 py-1.5 text-xs transition-all duration-200',
+                    proxySourceMode === 'remote'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )}
+                >
+                  {t('dialog.proxy.modeRemote', { defaultValue: '代理' })}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProxySourceMode('local');
+                    setSearchQuery('');
+                    setPage(1);
+                    setSelectedProxyUuids(
+                      initialSelection.mode === 'local'
+                        ? createSingleSelection(initialSelection.key)
+                        : createSingleSelection()
+                    );
+                  }}
+                  className={cn(
+                    'rounded-xl px-3 py-1.5 text-xs transition-all duration-200',
+                    proxySourceMode === 'local'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )}
+                >
+                  {t('dialog.proxy.modeLocal', { defaultValue: '本地代理' })}
+                </button>
+              </div>
+            </div>
             {/* 工具栏：搜索（左上角）+ 检测（右上角） */}
             <div className="flex items-center justify-between gap-2">
               <div className="relative group w-[320px]">
@@ -603,11 +728,25 @@ export function EnvironmentSelectProxyDialog({ onComplete }: EnvironmentSelectPr
             </div>
 
             {/* 表格区域 */}
-            {proxies.length === 0 && !loadingProxies ? (
+            {currentProxies.length === 0 && !currentLoading ? (
               <div className="rounded-lg border border-border/50 flex-1 min-h-0 flex items-center justify-center">
-                <EmptyState t={t} />
+                <EmptyState
+                  title={
+                    proxySourceMode === 'local'
+                      ? t('dialog.proxy.noLocalProxies', { defaultValue: '暂无本地代理' })
+                      : t('dialog.proxy.noProxies')
+                  }
+                  description={
+                    proxySourceMode === 'local'
+                      ? localError ||
+                        t('dialog.proxy.noLocalProxiesDescription', {
+                          defaultValue: '请先在 Mihomo 中选择并应用本地代理节点。',
+                        })
+                      : t('dialog.proxy.noProxiesDescription')
+                  }
+                />
               </div>
-            ) : filteredProxies.length === 0 && !loadingProxies ? (
+            ) : filteredProxies.length === 0 && !currentLoading ? (
               <div className="rounded-lg border border-border/50 flex-1 min-h-0 flex items-center justify-center">
                 <div className="flex flex-col items-center justify-center py-10 px-4">
                   <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500/20 to-indigo-500/20 flex items-center justify-center mb-4">
@@ -627,7 +766,7 @@ export function EnvironmentSelectProxyDialog({ onComplete }: EnvironmentSelectPr
                   data={pagedProxies}
                   columns={columns}
                   getRowKey={(row) => row.uuid}
-                  loading={loadingProxies}
+                  loading={currentLoading}
                   skeletonRows={pageSize}
                   emptyText=""
                   selectable={true}
@@ -724,9 +863,12 @@ export function EnvironmentSelectProxyDialog({ onComplete }: EnvironmentSelectPr
               size="sm"
               className="text-xs border-dashed hover:border-primary/50 hover:bg-primary/5"
               onClick={handleOpenCreateProxy}
+              disabled={proxySourceMode === 'local'}
             >
               <Plus className="h-3.5 w-3.5 mr-1.5" />
-              {t('dialog.proxy.createNew')}
+              {proxySourceMode === 'local'
+                ? t('dialog.proxy.localManagedByMihomo', { defaultValue: '由 Mihomo 管理' })
+                : t('dialog.proxy.createNew')}
             </Button>
             <div className="flex items-center gap-2">
               <Button
@@ -741,7 +883,7 @@ export function EnvironmentSelectProxyDialog({ onComplete }: EnvironmentSelectPr
                 size="sm"
                 className="text-xs bg-primary text-primary-foreground hover:bg-primary/90 border-0"
                 onClick={handleSave}
-                disabled={submitting || selectedProxyUuids.size !== 1}
+                disabled={submitting || !canSaveSelection}
               >
                 {submitting ? (
                   <>

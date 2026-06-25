@@ -5,6 +5,8 @@ import {
   Keyboard,
   Clock,
   GitBranch,
+  LogOut,
+  PanelsTopLeft,
   Repeat,
   Camera,
   Navigation,
@@ -51,6 +53,22 @@ const components: ComponentItem[] = [
     description: '打开一个新的页面并访问指定地址',
   },
   {
+    id: 'select-tab',
+    type: 'select_tab',
+    name: '选择标签页',
+    icon: PanelsTopLeft,
+    category: 'browser',
+    description: '切换到指定位置的标签页',
+  },
+  {
+    id: 'close-tab',
+    type: 'close_tab',
+    name: '关闭标签页',
+    icon: PanelsTopLeft,
+    category: 'browser',
+    description: '关闭指定位置的标签页',
+  },
+  {
     id: 'screenshot',
     type: 'screenshot',
     name: '截图',
@@ -90,6 +108,14 @@ const components: ComponentItem[] = [
     icon: Repeat,
     category: 'flow',
     description: '重复执行一组操作',
+  },
+  {
+    id: 'break-loop',
+    type: 'break_loop',
+    name: '退出循环',
+    icon: LogOut,
+    category: 'flow',
+    description: '立即退出当前循环并继续后续流程',
   },
   // 数据操作
   {

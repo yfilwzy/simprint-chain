@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Network,
   Workflow,
@@ -20,13 +20,16 @@ import { TfiWorld } from "react-icons/tfi";
 import { BsWindowSidebar } from "react-icons/bs";
 import { VscGitPullRequestCreate } from "react-icons/vsc";
 import type { IconType } from 'react-icons'
+import type { ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useTranslation } from 'react-i18next';
 import { FreeQuotaUsage } from './free-quota-usage';
-import { getGeneralSettings } from '../../../../services/store/src';
+import { getGeneralSettings, useMihomoRuntimeStore } from '../../../../services/store/src';
+import { ClashIcon } from '../../../../pages/proxy-center/src/mihomo/clash-icon';
+import { MihomoConnectDialog } from '../../../../pages/proxy-center/src/mihomo/mihomo-connect-dialog';
 
 interface NavItemData {
   label: string;
@@ -92,43 +95,170 @@ interface NavItemProps {
   icon: LucideIcon | IconType;
   isActive: boolean;
   collapsed: boolean;
+  actionIcon?: LucideIcon | IconType;
+  actionNode?: ReactNode;
+  actionLabel?: string;
+  actionButtonClassName?: string;
+  actionButtonAnimated?: boolean;
+  onActionClick?: () => void;
+}
+
+const COLLAPSED_PROXY_ACTION_DELAY_MS = 1000;
+
+function isRouteActive(currentPath: string, href: string): boolean {
+  return currentPath === href || currentPath.startsWith(`${href}/`);
 }
 
 /**
  * 导航项组件
  */
-const NavItem: React.FC<NavItemProps> = ({ label, href, icon: Icon, isActive, collapsed }) => {
+const NavItem: React.FC<NavItemProps> = ({
+  label,
+  href,
+  icon: Icon,
+  isActive,
+  collapsed,
+  actionIcon: ActionIcon,
+  actionNode,
+  actionLabel,
+  actionButtonClassName,
+  actionButtonAnimated,
+  onActionClick,
+}) => {
+  const [collapsedActionVisible, setCollapsedActionVisible] = useState(false);
+  const hoverTimerRef = useRef<number | null>(null);
+  const hasAction = !!((ActionIcon || actionNode) && onActionClick);
+
+  useEffect(() => {
+    if (!collapsed || !hasAction) {
+      setCollapsedActionVisible(false);
+    }
+  }, [collapsed, hasAction]);
+
+  useEffect(() => () => {
+    if (hoverTimerRef.current != null) {
+      window.clearTimeout(hoverTimerRef.current);
+    }
+  }, []);
+
+  const clearHoverTimer = () => {
+    if (hoverTimerRef.current != null) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  };
+
+  const handleMouseEnter = () => {
+    if (!collapsed || !hasAction) {
+      return;
+    }
+
+    clearHoverTimer();
+    hoverTimerRef.current = window.setTimeout(() => {
+      setCollapsedActionVisible(true);
+      hoverTimerRef.current = null;
+    }, COLLAPSED_PROXY_ACTION_DELAY_MS);
+  };
+
+  const handleMouseLeave = () => {
+    clearHoverTimer();
+    setCollapsedActionVisible(false);
+  };
+
   return (
-    <Link
-      to={href}
-      className={`group relative rounded-lg h-11 px-3 text-sm transition-[flex-direction,padding,gap] duration-300 ease-in-out ${collapsed
-        ? 'flex flex-row items-center justify-center  w-11'
-        : 'flex flex-row items-center gap-3'
-        } ${isActive
+    <div
+      className={`group relative ${collapsed ? 'w-11' : 'w-full'}`}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
+      {isActive && <div className='absolute -right-1 top-1/2 h-6 w-1 -translate-y-1/2 rounded-2xl bg-primary'>&nbsp;</div>}
+      <div
+        className={`relative rounded-lg h-11 text-sm transition-[padding,gap] duration-300 ease-in-out ${isActive
           ? 'bg-primary/15 text-primary font-semibold border-primary'
           : 'text-sidebar-foreground/80 hover:bg-accent/60 hover:text-foreground border-transparent'
-        }`}
-    >
-      {
-        isActive && <div className='absolute -right-1 bg-primary w-1 h-6 rounded-2xl'>&nbsp;</div>
-      }
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Icon
-            className={`h-4 w-4 ${isActive ? 'text-primary' : 'text-sidebar-foreground opacity-80'
-              } transition-all duration-200`}
-          />
-        </TooltipTrigger>
-        <TooltipContent side="right">{label}</TooltipContent>
-      </Tooltip>
-
-      <span
-        className={`text-xs h-4 overflow-hidden font-semibold transition-all duration-300 ${isActive ? 'text-primary' : 'text-sidebar-foreground/90'
-          } ${collapsed ? 'max-w-0 hidden' : 'max-w-50 block'}`}
+          }`}
       >
-        {label}
-      </span>
-    </Link>
+        <Link
+          to={href}
+          className={`flex h-11 items-center ${collapsed
+            ? 'justify-center px-3 w-11'
+            : `${(ActionIcon || actionNode) && onActionClick ? 'pr-11' : 'pr-3'} pl-3 gap-3`
+            }`}
+        >
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Icon
+                className={`h-4 w-4 transform-gpu ${isActive ? 'text-primary' : 'text-sidebar-foreground opacity-80'
+                  } transition-all duration-200 ${collapsed && hasAction
+                    ? collapsedActionVisible
+                      ? '-translate-x-2 opacity-0'
+                      : 'translate-x-0 opacity-100'
+                    : ''
+                  }`}
+              />
+            </TooltipTrigger>
+            <TooltipContent side="right">{label}</TooltipContent>
+          </Tooltip>
+
+          <span
+            className={`text-xs h-4 overflow-hidden font-semibold transition-all duration-300 ${isActive ? 'text-primary' : 'text-sidebar-foreground/90'
+              } ${collapsed ? 'max-w-0 hidden' : 'max-w-50 block'}`}
+          >
+            {label}
+          </span>
+        </Link>
+
+        {!collapsed && hasAction && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="absolute right-1 top-1/2 -translate-y-1/2">
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onActionClick();
+                  }}
+                  className={`flex h-8 w-8 items-center justify-center rounded-md border bg-background/60 transition-colors ${actionButtonAnimated ? 'animate-[sidebar-proxy-action-drift_10s_ease-in-out_infinite]' : ''} ${actionButtonClassName || 'border-border/60 text-sidebar-foreground/80 hover:bg-accent hover:text-foreground'}`}
+                  aria-label={actionLabel || label}
+                >
+                  {actionNode || (ActionIcon ? <ActionIcon className="h-3.5 w-3.5" /> : null)}
+                </button>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="right">{actionLabel || label}</TooltipContent>
+          </Tooltip>
+        )}
+
+        {collapsed && hasAction && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onActionClick();
+                }}
+                className={`absolute inset-0 z-10 flex h-11 w-11 items-center justify-center rounded-lg border transform-gpu transition-all duration-200 ${collapsedActionVisible
+                  ? 'pointer-events-auto translate-x-0 opacity-100'
+                  : 'pointer-events-none translate-x-2 opacity-0'
+                  } ${actionButtonClassName || (isActive
+                    ? 'border-primary/40 bg-primary/10 text-primary'
+                    : 'border-border/60 bg-background/90 text-sidebar-foreground/80 hover:bg-accent hover:text-foreground')
+                  }`}
+                aria-label={actionLabel || label}
+              >
+                <span className="flex items-center justify-center transition-transform duration-200">
+                  {actionNode || (ActionIcon ? <ActionIcon className="h-4 w-4" /> : null)}
+                </span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">{actionLabel || label}</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+    </div>
   );
 };
 
@@ -136,12 +266,26 @@ interface NavGroupComponentProps {
   group: NavGroup;
   collapsed: boolean;
   currentPath: string;
+  proxyActionLabel: string;
+  proxyActionNode: ReactNode;
+  proxyActionButtonClassName?: string;
+  proxyActionButtonAnimated?: boolean;
+  onProxyActionClick: () => void;
 }
 
 /**
  * 导航分组组件
  */
-const NavGroupComponent: React.FC<NavGroupComponentProps> = ({ group, collapsed, currentPath }) => {
+const NavGroupComponent: React.FC<NavGroupComponentProps> = ({
+  group,
+  collapsed,
+  currentPath,
+  proxyActionLabel,
+  proxyActionNode,
+  proxyActionButtonClassName,
+  proxyActionButtonAnimated,
+  onProxyActionClick,
+}) => {
   return (
     <div className="space-y-1">
       {group.title && !collapsed && (
@@ -155,8 +299,13 @@ const NavGroupComponent: React.FC<NavGroupComponentProps> = ({ group, collapsed,
           label={item.label}
           href={item.href}
           icon={item.icon}
-          isActive={currentPath === item.href}
+          isActive={isRouteActive(currentPath, item.href)}
           collapsed={collapsed}
+          actionNode={item.href === '/proxy' ? proxyActionNode : undefined}
+          actionLabel={item.href === '/proxy' ? proxyActionLabel : undefined}
+          actionButtonClassName={item.href === '/proxy' ? proxyActionButtonClassName : undefined}
+          actionButtonAnimated={item.href === '/proxy' ? proxyActionButtonAnimated : undefined}
+          onActionClick={item.href === '/proxy' ? onProxyActionClick : undefined}
         />
       ))}
     </div>
@@ -167,12 +316,26 @@ interface NavListProps {
   groups: NavGroup[];
   collapsed: boolean;
   currentPath: string;
+  proxyActionLabel: string;
+  proxyActionNode: ReactNode;
+  proxyActionButtonClassName?: string;
+  proxyActionButtonAnimated?: boolean;
+  onProxyActionClick: () => void;
 }
 
 /**
  * 导航列表组件
  */
-const NavList: React.FC<NavListProps> = ({ groups, collapsed, currentPath }) => {
+const NavList: React.FC<NavListProps> = ({
+  groups,
+  collapsed,
+  currentPath,
+  proxyActionLabel,
+  proxyActionNode,
+  proxyActionButtonClassName,
+  proxyActionButtonAnimated,
+  onProxyActionClick,
+}) => {
   return (
     <ScrollArea className="flex-1 m-1 min-h-0">
       <nav>
@@ -180,7 +343,16 @@ const NavList: React.FC<NavListProps> = ({ groups, collapsed, currentPath }) => 
           <div key={group.title || `group-${index}`}>
             {index > 0 && collapsed && <div className="my-1 mx-3 border-t border-sidebar-border" />}
             <div className={collapsed ? '' : 'mb-3'}>
-              <NavGroupComponent group={group} collapsed={collapsed} currentPath={currentPath} />
+              <NavGroupComponent
+                group={group}
+                collapsed={collapsed}
+                currentPath={currentPath}
+                proxyActionLabel={proxyActionLabel}
+                proxyActionNode={proxyActionNode}
+                proxyActionButtonClassName={proxyActionButtonClassName}
+                proxyActionButtonAnimated={proxyActionButtonAnimated}
+                onProxyActionClick={onProxyActionClick}
+              />
             </div>
           </div>
         ))}
@@ -301,7 +473,7 @@ const TopNavItems: React.FC<TopNavItemsProps> = ({ collapsed, currentPath }) => 
           label={item.label}
           href={item.href}
           icon={item.icon}
-          isActive={currentPath === item.href}
+          isActive={isRouteActive(currentPath, item.href)}
           collapsed={collapsed}
         />
       ))}
@@ -335,7 +507,7 @@ const BottomNavItems: React.FC<BottomNavItemsProps> = ({ collapsed, currentPath 
           label={item.label}
           href={item.href}
           icon={item.icon}
-          isActive={currentPath === item.href}
+          isActive={isRouteActive(currentPath, item.href)}
           collapsed={collapsed}
         />
       ))}
@@ -393,10 +565,15 @@ const SidebarPlaceholder: React.FC<SidebarPlaceholderProps> = ({ collapsed }) =>
  */
 export const AppSidebar: React.FC = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const { t } = useTranslation('appLayout');
   const [collapsed, setCollapsed] = useState(true);
   const [isAnimating, setIsAnimating] = useState(false);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [mihomoDialogOpen, setMihomoDialogOpen] = useState(false);
+  const mihomoRunning = useMihomoRuntimeStore((state) => state.running);
+  const mihomoAttached = useMihomoRuntimeStore((state) => state.attached);
+  const mihomoCheckedAt = useMihomoRuntimeStore((state) => state.checkedAt);
 
   useEffect(() => {
     let cancelled = false;
@@ -419,6 +596,28 @@ export const AppSidebar: React.FC = () => {
     };
   }, []);
 
+  const handleOpenMihomo = async () => {
+    if (!mihomoRunning) {
+      navigate('/proxy?mode=local');
+      return;
+    }
+
+    await useMihomoRuntimeStore.getState().refresh();
+    const { running, attached } = useMihomoRuntimeStore.getState();
+
+    if (!running) {
+      navigate('/proxy?mode=local');
+      return;
+    }
+
+    if (attached) {
+      navigate('/proxy/mihomo');
+      return;
+    }
+
+    setMihomoDialogOpen(true);
+  };
+
   const handleToggle = () => {
     setIsAnimating(true);
     setCollapsed((prev) => !prev);
@@ -431,6 +630,33 @@ export const AppSidebar: React.FC = () => {
   if (!settingsLoaded) {
     return <SidebarPlaceholder collapsed={collapsed} />;
   }
+
+  const mihomoStatusTone = mihomoRunning
+    ? mihomoAttached
+      ? 'connected'
+      : 'warning'
+    : mihomoCheckedAt == null
+      ? 'unknown'
+      : 'offline';
+
+  const mihomoActionNode = (
+    <span className="relative flex items-center justify-center">
+      <ClashIcon className="h-4 w-4 text-current" />
+      {mihomoStatusTone === 'connected' ? (
+        <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full border border-background bg-emerald-500" />
+      ) : mihomoStatusTone === 'warning' ? (
+        <span className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-background bg-amber-500 text-[9px] font-bold leading-none text-white">
+          !
+        </span>
+      ) : mihomoStatusTone === 'unknown' ? (
+        <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full border border-background bg-muted-foreground/60" />
+      ) : (
+        <span className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-background bg-rose-500 text-[9px] font-bold leading-none text-white">
+          !
+        </span>
+      )}
+    </span>
+  );
 
   return (
     <aside
@@ -446,11 +672,22 @@ export const AppSidebar: React.FC = () => {
         </div>
 
         {/* 导航列表区域 */}
-        <NavList
-          groups={localizeNavGroups(t)}
-          collapsed={collapsed}
-          currentPath={location.pathname}
-        />
+      <NavList
+        groups={localizeNavGroups(t)}
+        collapsed={collapsed}
+        currentPath={location.pathname}
+        proxyActionLabel={t('nav.item.mihomo', { defaultValue: 'Mihomo' })}
+        proxyActionNode={mihomoActionNode}
+        proxyActionButtonClassName={
+          mihomoStatusTone === 'connected'
+            ? 'border-emerald-500/30 bg-background/90 text-emerald-600 hover:bg-muted hover:text-foreground'
+            : mihomoStatusTone === 'warning'
+              ? 'border-amber-500/30 bg-background/90 text-amber-600 hover:bg-muted hover:text-foreground'
+              : 'border-rose-500/30 bg-background/90 text-rose-600 hover:bg-muted hover:text-rose-600'
+        }
+        proxyActionButtonAnimated={!collapsed}
+        onProxyActionClick={handleOpenMihomo}
+      />
 
         {/* 底部导航项（指纹审计、系统设置） */}
         <div className="shrink-0">
@@ -467,6 +704,14 @@ export const AppSidebar: React.FC = () => {
           <CollapseButton collapsed={collapsed} onToggle={handleToggle} />
         </div>
       </div>
+      <MihomoConnectDialog
+        open={mihomoDialogOpen}
+        onOpenChange={setMihomoDialogOpen}
+        onConnected={() => {
+          void useMihomoRuntimeStore.getState().refresh();
+          navigate('/proxy/mihomo');
+        }}
+      />
     </aside>
   );
 };

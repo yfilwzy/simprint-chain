@@ -336,6 +336,42 @@ export function PropertyPanel({ step, onUpdateStep, onDeleteStep, embedded = fal
           </>
         );
 
+      case 'select_tab':
+        return (
+          <div className="space-y-2">
+            <Label className="text-xs">
+              {t('editor.config.tabIndex', { defaultValue: '标签页位置' })}
+            </Label>
+            <NumberStepInput
+              value={(step.config.tabIndex as number) || 1}
+              min={1}
+              onChange={(value) => handleConfigChange('tabIndex', Math.max(1, Math.trunc(value)))}
+              className="w-full"
+              inputClassName="w-full px-3 text-left text-xs"
+              decreaseLabel="减少标签页位置"
+              increaseLabel="增加标签页位置"
+            />
+          </div>
+        );
+
+      case 'close_tab':
+        return (
+          <div className="space-y-2">
+            <Label className="text-xs">
+              {t('editor.config.tabIndex', { defaultValue: '标签页位置' })}
+            </Label>
+            <NumberStepInput
+              value={(step.config.tabIndex as number) || 1}
+              min={1}
+              onChange={(value) => handleConfigChange('tabIndex', Math.max(1, Math.trunc(value)))}
+              className="w-full"
+              inputClassName="w-full px-3 text-left text-xs"
+              decreaseLabel="减少标签页位置"
+              increaseLabel="增加标签页位置"
+            />
+          </div>
+        );
+
       case 'wait':
         return (
           <>
@@ -362,7 +398,8 @@ export function PropertyPanel({ step, onUpdateStep, onDeleteStep, embedded = fal
                     value={(step.config.duration as number) || 1000}
                     min={0}
                     onChange={(value) => handleConfigChange('duration', value)}
-                    inputClassName="w-16 text-xs"
+                    className="w-full"
+                    inputClassName="w-full px-3 text-left text-xs"
                     decreaseLabel="减少等待时长"
                     increaseLabel="增加等待时长"
                   />
@@ -445,7 +482,8 @@ export function PropertyPanel({ step, onUpdateStep, onDeleteStep, embedded = fal
                 value={(step.config.iterations as number) || 3}
                 min={1}
                 onChange={(value) => handleConfigChange('iterations', Math.max(1, value))}
-                inputClassName="w-12 text-xs"
+                className="w-full"
+                inputClassName="w-full px-3 text-left text-xs"
                 decreaseLabel="减少循环次数"
                 increaseLabel="增加循环次数"
               />
@@ -454,6 +492,15 @@ export function PropertyPanel({ step, onUpdateStep, onDeleteStep, embedded = fal
               {t('editor.loop.regionHint', { defaultValue: '循环节点是一个区域容器。将需要重复执行的节点拖入该区域，区域外连线表示循环完成后继续执行。' })}
             </div>
           </>
+        );
+
+      case 'break_loop':
+        return (
+          <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-3 text-xs text-muted-foreground">
+            {t('editor.stepSubtitleDefaults.breakLoop', {
+              defaultValue: '满足条件时立即退出当前循环',
+            })}
+          </div>
         );
 
       case 'extract':
@@ -538,12 +585,21 @@ export function PropertyPanel({ step, onUpdateStep, onDeleteStep, embedded = fal
       case 'script':
         return (
           <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs">{t('editor.config.localExecution', { defaultValue: '是否本地执行' })}</Label>
+              <Switch
+                checked={(step.config.executionMode as string) === 'local'}
+                onCheckedChange={(checked) =>
+                  handleConfigChange('executionMode', checked ? 'local' : 'browser')
+                }
+              />
+            </div>
             <Label className="text-xs">{t('editor.config.script')}</Label>
             <Textarea
               value={(step.config.script as string) || ''}
               onChange={(e) => handleConfigChange('script', e.target.value)}
               placeholder="return document.title;"
-              className="text-xs min-h-[120px] w-full font-mono resize-none break-all whitespace-pre-wrap"
+              className="h-[120px] w-full overflow-y-auto font-mono text-xs resize-none break-all whitespace-pre-wrap"
             />
             <div className="space-y-2">
               <Label className="text-xs">变量名</Label>
@@ -573,7 +629,7 @@ export function PropertyPanel({ step, onUpdateStep, onDeleteStep, embedded = fal
   };
 
   return (
-    <div className={embedded ? 'bg-background flex flex-col min-h-0 overflow-hidden h-full' : 'w-72 border-l border-border bg-background flex flex-col min-h-0 overflow-hidden'}>
+    <div className={embedded ? 'bg-background flex flex-1 min-h-0 flex-col overflow-hidden' : 'w-72 border-l border-border bg-background flex flex-col min-h-0 overflow-hidden'}>
       {!embedded ? (
         <div className="px-3 py-2 border-b border-border flex items-center justify-between shrink-0">
           <h3 className="text-xs font-semibold text-foreground">{t('editor.properties')}</h3>

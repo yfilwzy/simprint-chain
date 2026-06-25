@@ -61,6 +61,16 @@ export {
   DEFAULT_STORAGE_SETTINGS,
 } from './stores/storage-settings';
 export type { DirectorySizeCache, StorageSettings, StoragePathKey } from './stores/storage-settings';
+export {
+  getEnvironmentLocalProxyBindings,
+  setEnvironmentLocalProxyBinding,
+  removeEnvironmentLocalProxyBinding,
+} from './stores/environment-local-proxy-binding';
+export type {
+  EnvironmentLocalProxyBinding,
+  EnvironmentLocalProxyBindingMap,
+} from './stores/environment-local-proxy-binding';
+export { useMihomoRuntimeStore } from './stores/mihomo-runtime';
 
 /**
  * App Store Provider 组件
@@ -68,6 +78,7 @@ export type { DirectorySizeCache, StorageSettings, StoragePathKey } from './stor
  * 实际上它只是渲染 children，不做任何包装
  */
 export { SettingsBootstrap } from './components/settings-bootstrap';
+export { MihomoRuntimeSubscriber } from './components/mihomo-runtime/mihomo-runtime-subscriber';
 
 export const AppStoreProvider = ({ children }: { children: React.ReactNode }) => {
   // zustand 不需要 Provider，直接返回 children

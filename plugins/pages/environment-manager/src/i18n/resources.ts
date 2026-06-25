@@ -365,6 +365,8 @@ export const environmentResources = {
       },
       proxy: {
         title: '代理设置',
+        modeRemote: '代理',
+        modeLocal: '本地代理',
         type: '代理类型',
         host: '主机地址',
         hostPlaceholder: '请输入主机地址',
@@ -393,6 +395,9 @@ export const environmentResources = {
         searchPlaceholder: '搜索代理...',
         noProxies: '暂无可用代理',
         noProxiesDescription: '创建一个代理来保护您的环境隐私并伪装真实 IP 地址',
+        noLocalProxies: '暂无本地代理',
+        noLocalProxiesDescription: '请先在 Mihomo 中选择并应用本地代理节点',
+        localManagedByMihomo: '由 Mihomo 管理',
         createFirst: '创建第一个代理',
         createNew: '新增代理',
         loadFailed: '加载代理列表失败',
@@ -848,6 +853,8 @@ export const environmentResources = {
       },
       proxy: {
         title: 'Proxy Settings',
+        modeRemote: 'Proxy',
+        modeLocal: 'Local Proxy',
         type: 'Proxy Type',
         host: 'Host',
         hostPlaceholder: 'Enter host address',
@@ -877,6 +884,9 @@ export const environmentResources = {
         noProxies: 'No proxies available',
         noProxiesDescription:
           'Create a proxy to protect your environment privacy and mask your real IP address',
+        noLocalProxies: 'No local proxies available',
+        noLocalProxiesDescription: 'Select and apply local proxy nodes in Mihomo first',
+        localManagedByMihomo: 'Managed by Mihomo',
         createFirst: 'Create first proxy',
         createNew: 'Add Proxy',
         loadFailed: 'Failed to load proxy list',

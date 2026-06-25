@@ -32,7 +32,9 @@ export function getDefaultWindowConfig(): WindowConfig {
       kernel: defaultKernel,
       userAgent: generateUserAgentByKernel(defaultSystem, defaultKernel),
       searchEngine: 'Google',
+      proxySourceMode: 'remote',
       proxyUuids: [],
+      localProxyNodeNames: [],
       accountUuids: [],
       urls: [],
       cookies: [],
@@ -114,7 +116,6 @@ export function getDefaultWindowConfig(): WindowConfig {
     projectMetadata: {
       defaultProject: '',
       tags: [],
-      proxyChainId: '',
     },
   };
 }
