@@ -187,7 +187,7 @@ const ProxyCenterPage: React.FC = () => {
               : 'text-muted-foreground hover:bg-muted hover:text-foreground'
           }`}
         >
-          链式代理
+          代理链（机场订阅 / 落地代理）
         </button>
       </div>
 

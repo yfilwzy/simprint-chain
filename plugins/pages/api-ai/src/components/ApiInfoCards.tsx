@@ -13,7 +13,7 @@ export function ApiInfoCards() {
           {t('cards.rateLimitDesc')}
         </p>
         <a
-          href="/billing"
+          href="/plans"
           className="text-xs text-primary hover:underline inline-flex items-center gap-1"
         >
           {t('cards.upgrade')}

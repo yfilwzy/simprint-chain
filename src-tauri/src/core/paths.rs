@@ -21,6 +21,16 @@ const BOOTSTRAP_FILENAME: &str = "bootstrap.json";
 #[cfg(target_os = "windows")]
 const RUNTIME_PATHS_REGISTRY_SUBKEY: &str = "Software\\Simprint\\RuntimePaths";
 
+/// 默认数据根目录的环境变量覆盖键。
+///
+/// 破限本地版将默认根目录迁移到 D 盘；如需自定义（例如 D 盘不存在或多系统迁移），
+/// 设置该环境变量即可覆盖，取值需为绝对路径。
+const DATA_ROOT_ENV: &str = "SIMPRINT_DATA_DIR";
+
+/// D 盘默认根目录常量（破限本地版）。
+#[cfg(target_os = "windows")]
+const DEFAULT_D_DRIVE_ROOT: &str = "D:\\Simprint";
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 struct BootstrapConfig {
     root_dir: Option<String>,
@@ -39,22 +49,62 @@ pub struct PathManager;
 
 impl PathManager {
     /// 默认根目录（不受 bootstrap 影响）
+    ///
+    /// 破限本地版优先级：
+    /// 1. 环境变量 `SIMPRINT_DATA_DIR`（绝对路径，最高优先级）
+    /// 2. Windows：`D:\Simprint`（若 D 盘可写）；D 盘不可用时回退到原 `%LOCALAPPDATA%\Simprint`
+    /// 3. macOS / Linux：`~/.config/Simprint`
     pub fn get_default_root_dir() -> Result<PathBuf> {
-        let base_dirs = BaseDirs::new().ok_or_else(|| anyhow!("无法获取系统基础目录"))?;
+        // 1. 环境变量覆盖
+        if let Ok(custom) = std::env::var(DATA_ROOT_ENV) {
+            let trimmed = custom.trim();
+            if !trimmed.is_empty() {
+                let path = PathBuf::from(trimmed);
+                if path.is_absolute() {
+                    return Ok(path);
+                }
+            }
+        }
 
         #[cfg(target_os = "windows")]
         {
+            // 2. 优先使用 D 盘根目录
+            let d_root = PathBuf::from(DEFAULT_D_DRIVE_ROOT);
+            if Self::is_drive_writable("D:\\") {
+                return Ok(d_root);
+            }
+            // D 盘不可用（例如无 D 分区），回退到系统 LocalAppData，保证可用性
+            let base_dirs = BaseDirs::new().ok_or_else(|| anyhow!("无法获取系统基础目录"))?;
             Ok(base_dirs.data_local_dir().join(APP_DIR_NAME))
         }
 
         #[cfg(target_os = "macos")]
         {
+            let base_dirs = BaseDirs::new().ok_or_else(|| anyhow!("无法获取系统基础目录"))?;
             Ok(base_dirs.config_dir().join(APP_DIR_NAME))
         }
 
         #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
         {
+            let base_dirs = BaseDirs::new().ok_or_else(|| anyhow!("无法获取系统基础目录"))?;
             Ok(base_dirs.config_dir().join(APP_DIR_NAME))
+        }
+    }
+
+    /// 检测指定盘符根目录是否可写（用于判断 D 盘是否存在且可创建目录）。
+    #[cfg(target_os = "windows")]
+    fn is_drive_writable(drive_root: &str) -> bool {
+        let root = Path::new(drive_root);
+        if !root.exists() {
+            return false;
+        }
+        // 尝试在根目录创建临时子目录来验证可写性（失败说明只读或无权限）
+        match std::fs::create_dir_all(root.join(".simprint_probe")) {
+            Ok(_) => {
+                let _ = std::fs::remove_dir(root.join(".simprint_probe"));
+                true
+            }
+            Err(_) => false,
         }
     }
 

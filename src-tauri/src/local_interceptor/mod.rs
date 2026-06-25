@@ -26,6 +26,16 @@ fn store() -> &'static LocalStore {
     })
 }
 
+/// 返回当前本地数据库文件路径（供备份/导入功能使用）。
+pub fn local_db_path() -> std::path::PathBuf {
+    store().db_path().to_path_buf()
+}
+
+/// 强制 WAL 检查点，确保数据落盘（导出备份前调用）。
+pub fn checkpoint_local_db() -> std::result::Result<(), String> {
+    store().checkpoint()
+}
+
 /// 尝试用本地拦截器处理请求。
 ///
 /// 返回 `Some(Ok(response))` 表示已被本地处理；
@@ -79,6 +89,16 @@ pub fn try_intercept(url: &str, data: Option<&Value>) -> Option<std::result::Res
         "workspace-quotas/update" => success_empty(),
         "billing/quota" => infinite_quota(),
         "billing/subscription" => premium_subscription(),
+
+        // ===== Local API 运行时配置（MCP / 本地 HTTP API 共用）=====
+        // 破限版无远程服务，伪造一份有效配置，使 MCP server / Local API server 能正常拉起。
+        "local-api/get" => mock_local_api_runtime_config(),
+
+        // ===== 审计日志（本地版无服务端日志，返回空数据避免页面报错）=====
+        "audit/logs" => empty_audit_logs(),
+        "audit/logs/detail" => success_empty(),
+        "audit/logs/export" => empty_audit_export(),
+        "audit/stats" => empty_audit_stats(),
 
         // ===== 其他不匹配，透传 =====
         _ => return None,
@@ -157,6 +177,72 @@ fn premium_subscription() -> std::result::Result<JsonRespnse, String> {
             "status": "active",
             "is_premium": true,
             "max_environments": 999999
+        })),
+    })
+}
+
+/// 本地 Local API 运行时配置（伪造，供 MCP server / 本地 HTTP API server 启动使用）。
+///
+/// 破限版无远程 main server，`mcp/manager.rs` 与 `local_api/manager` 都依赖
+/// `local-api/get` 返回的 `api_key` 才能拉起本地服务。这里返回一份固定有效配置，
+/// `api_key` 与本地 server 鉴权保持一致（均使用同一本地常量）。
+fn mock_local_api_runtime_config() -> std::result::Result<JsonRespnse, String> {
+    Ok(JsonRespnse {
+        code: Some(1),
+        message: Some("success".into()),
+        data: Some(json!({
+            "enabled": true,
+            "apiKey": "simprint-local-mock-key-v1",
+            "port": 37111,
+            "remoteAccess": false,
+            "corsOrigins": [],
+            "requestsToday": 0,
+            "dailyLimit": 999999
+        })),
+    })
+}
+
+/// 空审计日志列表（本地版无服务端日志采集）。
+///
+/// 响应结构匹配前端 `AuditLogsListResponse`：items / total / page / page_size。
+fn empty_audit_logs() -> std::result::Result<JsonRespnse, String> {
+    Ok(JsonRespnse {
+        code: Some(1),
+        message: Some("success".into()),
+        data: Some(json!({
+            "items": [],
+            "total": 0,
+            "page": 1,
+            "page_size": 20
+        })),
+    })
+}
+
+/// 空审计日志导出（匹配前端 `ExportResponse`：content / filename / mime_type）。
+fn empty_audit_export() -> std::result::Result<JsonRespnse, String> {
+    Ok(JsonRespnse {
+        code: Some(1),
+        message: Some("success".into()),
+        data: Some(json!({
+            "content": "[]",
+            "filename": "audit-logs-empty.json",
+            "mimeType": "application/json"
+        })),
+    })
+}
+
+/// 空审计统计（匹配前端 `AuditStatsResponse`：全部计数为 0，top 列表为空）。
+fn empty_audit_stats() -> std::result::Result<JsonRespnse, String> {
+    Ok(JsonRespnse {
+        code: Some(1),
+        message: Some("success".into()),
+        data: Some(json!({
+            "totalLogs": 0,
+            "logsToday": 0,
+            "logsThisWeek": 0,
+            "logsThisMonth": 0,
+            "topActions": [],
+            "topTargetTypes": []
         })),
     })
 }

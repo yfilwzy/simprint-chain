@@ -6,7 +6,7 @@ use crate::core::error::{Error, Result};
 
 use super::redact::redact_value;
 use super::storage;
-use super::types::{GeneratedMihomoConfig, LandingSocksConfig, ProxyChainConfig, ProxyPolicy};
+use super::types::{GeneratedMihomoConfig, LandingSocksConfig, ProxyChainConfig, ProxyChainMode, ProxyPolicy};
 
 /// Mihomo group used by landing SOCKS proxies as `dialer-proxy`.
 ///
@@ -54,7 +54,7 @@ pub fn build_mihomo_value(config: &ProxyChainConfig) -> Result<(Value, usize, us
     let first_hop_names = collect_first_hop_names(&inventory, primary_policy);
     let landing_names = collect_landing_names(&inventory, primary_policy);
 
-    validate_chain_inventory(&first_hop_names, &landing_names)?;
+    validate_chain_inventory(config.mode, &first_hop_names, &landing_names)?;
 
     let mut root = Map::new();
     insert_if_some(&mut root, "mixed-port", config.mihomo.mixed_port);
@@ -106,7 +106,7 @@ pub fn build_mihomo_value(config: &ProxyChainConfig) -> Result<(Value, usize, us
         Value::Array(inventory.proxies.into_iter().map(|item| item.raw).collect()),
     );
 
-    let proxy_groups = build_proxy_groups(config, primary_policy, first_hop_names, landing_names);
+    let proxy_groups = build_proxy_groups(config, primary_policy, first_hop_names, landing_names, config.mode);
     let proxy_group_count = proxy_groups.len();
     root.insert("proxy-groups".to_string(), Value::Array(proxy_groups));
     root.insert(
@@ -291,15 +291,20 @@ fn collect_landing_names(inventory: &ProxyInventory, policy: &ProxyPolicy) -> Ve
     names
 }
 
-fn validate_chain_inventory(first_hop_names: &[String], landing_names: &[String]) -> Result<()> {
+fn validate_chain_inventory(
+    mode: ProxyChainMode,
+    first_hop_names: &[String],
+    landing_names: &[String],
+) -> Result<()> {
     if first_hop_names.is_empty() {
         return Err(Error::ProxyConfigInvalid.log_with(
-            "链式代理至少需要一个已启用且已成功解析的机场节点；请先更新订阅并确保节点不是 -1",
+            "代理链至少需要一个已启用且已成功解析的机场节点；请先更新订阅并确保节点不是 -1",
         ));
     }
-    if landing_names.is_empty() {
+    // 仅落地链模式强制要求落地 SOCKS5；直连模式无需落地。
+    if matches!(mode, ProxyChainMode::LandingChain) && landing_names.is_empty() {
         return Err(Error::ProxyConfigInvalid.log_with(
-            "链式代理至少需要一个已启用的落地 SOCKS5；为避免严格网站看到机场出口，禁止无落地直连",
+            "落地链模式至少需要一个已启用的落地 SOCKS5；为避免严格网站看到机场出口，请切换为「机场订阅直连」模式或添加落地代理",
         ));
     }
     Ok(())
@@ -310,6 +315,7 @@ fn build_proxy_groups(
     primary_policy: &ProxyPolicy,
     first_hop_names: Vec<String>,
     landing_names: Vec<String>,
+    mode: ProxyChainMode,
 ) -> Vec<Value> {
     let mut groups = Vec::new();
     let url = primary_policy
@@ -318,6 +324,7 @@ fn build_proxy_groups(
         .unwrap_or_else(|| config.mihomo.default_test_url.clone());
     let interval = primary_policy.interval_seconds.unwrap_or(300);
 
+    // 机场节点组：自动 / 回落 / 手动 / 优选选择器（两种模式共用）
     groups.push(build_test_group(
         FIRST_HOP_AUTO_GROUP,
         "url-test",
@@ -337,7 +344,21 @@ fn build_proxy_groups(
         first_hop_names.clone(),
     ));
     groups.push(build_first_hop_selector(primary_policy, first_hop_names));
-    groups.push(build_select_group(FINAL_PROXY_GROUP, landing_names));
+
+    // 最终 PROXY 组：按模式决定指向。
+    match mode {
+        // 直连模式：PROXY 直接指向机场节点优选组，无落地。
+        ProxyChainMode::Direct => {
+            groups.push(build_select_group(
+                FINAL_PROXY_GROUP,
+                vec![FIRST_HOP_SELECTOR_GROUP.to_string()],
+            ));
+        }
+        // 落地链模式：PROXY 指向落地 SOCKS5（每个落地连接经机场节点拨号）。
+        ProxyChainMode::LandingChain => {
+            groups.push(build_select_group(FINAL_PROXY_GROUP, landing_names));
+        }
+    }
 
     groups
 }
