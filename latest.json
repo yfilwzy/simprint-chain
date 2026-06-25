@@ -1,0 +1,12 @@
+{
+  "version": "0.2.26-chain.1",
+  "notes": "官方 v0.2.26 融合版：browser-extensions/mihomo/RPA 全功能 + 本地魔改（proxy_chain/MCP registry/catalog）。自托管子路径版。",
+  "pub_date": "2026-06-25T12:14:00Z",
+  "platforms": {
+    "x86_64-pc-windows-msvc": {
+      "url": "https://github.com/yfilwzy/simprint-chain/releases/download/v0.2.26-chain.2/Simprint_0.2.26-chain.1_x64-setup.exe",
+      "r2_url": "https://github.com/yfilwzy/simprint-chain/releases/download/v0.2.26-chain.2/Simprint_0.2.26-chain.1_x64-setup.exe",
+      "signature": "25dd9abea6801d78d25aa45f83538b0bf43c7e2eb5ba4c31a78a2d9bc7bf1fe0"
+    }
+  }
+}
