@@ -2,7 +2,7 @@
 // 等效 GUI 操作（注册→登录→创建环境→token持久化），且可查 DB 落库验证。
 //
 // 运行: go run ./e2e_production_check.go
-// 服务器: https://api.yfilwzy.cc.cd/simprint/  API_SECRET: s3eqVcjYIwxb5i3YtBP6
+// 服务器: https://api.yfilwzy.cc.cd/simprint/  API_SECRET: 从 E2E_API_SECRET 环境变量读
 package main
 
 import (
