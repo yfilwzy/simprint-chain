@@ -9,8 +9,19 @@ use serde_json::Value;
 
 use crate::{
     local_api::entitys::LocalApiGroupItem,
-    mcp::{error::McpToolError, server::McpServer},
+    mcp::{error::McpToolError, registry::ToolEntry, server::McpServer},
 };
+
+/// 导出本模块工具的元数据（供 registry 索引，不参与 rmcp 调用）
+pub fn metadata() -> Vec<ToolEntry> {
+    use crate::mcp::registry::ToolCategory;
+    vec![
+        ToolEntry::new("simprint_list_groups", "列出分组", "List Simprint groups.", ToolCategory::Group),
+        ToolEntry::new("simprint_create_group", "创建分组", "Create a Simprint group.", ToolCategory::Group),
+        ToolEntry::new("simprint_update_group", "更新分组", "Update a Simprint group.", ToolCategory::Group),
+        ToolEntry::new("simprint_delete_group", "删除分组", "Delete a Simprint group by UUID.", ToolCategory::Group),
+    ]
+}
 
 pub fn routes() -> Vec<ToolRoute<McpServer>> {
     ToolRouter::new()

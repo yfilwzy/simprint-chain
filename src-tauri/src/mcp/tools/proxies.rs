@@ -12,9 +12,23 @@ use crate::{
     mcp::{
         bridge::{LocalApiListProxiesFilters, LocalApiListProxiesRequest},
         error::McpToolError,
+        registry::ToolEntry,
         server::McpServer,
     },
 };
+
+/// 导出本模块工具的元数据（供 registry 索引，不参与 rmcp 调用）
+pub fn metadata() -> Vec<ToolEntry> {
+    use crate::mcp::registry::ToolCategory;
+    vec![
+        ToolEntry::new("simprint_list_proxies", "列出代理", "List Simprint proxies with optional filters.", ToolCategory::Proxy),
+        ToolEntry::new("simprint_get_proxy", "获取代理", "Get a Simprint proxy by UUID.", ToolCategory::Proxy),
+        ToolEntry::new("simprint_create_proxy", "创建代理", "Create a Simprint proxy.", ToolCategory::Proxy),
+        ToolEntry::new("simprint_update_proxy", "更新代理", "Update a Simprint proxy.", ToolCategory::Proxy),
+        ToolEntry::new("simprint_delete_proxy", "删除代理", "Delete a Simprint proxy by UUID.", ToolCategory::Proxy),
+        ToolEntry::new("simprint_batch_delete_proxies", "批量删除代理", "Delete multiple Simprint proxies by UUID.", ToolCategory::Proxy),
+    ]
+}
 
 pub fn routes() -> Vec<ToolRoute<McpServer>> {
     ToolRouter::new()

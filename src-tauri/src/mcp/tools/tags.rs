@@ -9,8 +9,39 @@ use serde_json::Value;
 
 use crate::{
     local_api::entitys::LocalApiTagItem,
-    mcp::{error::McpToolError, server::McpServer},
+    mcp::{error::McpToolError, registry::ToolEntry, server::McpServer},
 };
+
+/// 导出本模块工具的元数据（供 registry 索引，不参与 rmcp 调用）
+pub fn metadata() -> Vec<ToolEntry> {
+    use crate::mcp::registry::ToolCategory;
+    vec![
+        ToolEntry::new(
+            "simprint_list_tags",
+            "列出标签",
+            "List Simprint tags.",
+            ToolCategory::Tag,
+        ),
+        ToolEntry::new(
+            "simprint_create_tag",
+            "创建标签",
+            "Create a Simprint tag.",
+            ToolCategory::Tag,
+        ),
+        ToolEntry::new(
+            "simprint_update_tag",
+            "更新标签",
+            "Update a Simprint tag.",
+            ToolCategory::Tag,
+        ),
+        ToolEntry::new(
+            "simprint_delete_tag",
+            "删除标签",
+            "Delete a Simprint tag by UUID.",
+            ToolCategory::Tag,
+        ),
+    ]
+}
 
 pub fn routes() -> Vec<ToolRoute<McpServer>> {
     ToolRouter::new()

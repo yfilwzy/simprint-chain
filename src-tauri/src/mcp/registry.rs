@@ -1,27 +1,25 @@
-//! MCP 工具注册表（registry）骨架
+//! MCP 工具注册表（registry）—— 元数据索引层
 //!
-//! 借鉴 CLI-Anything 的 registry.json / SKILL.md / repl_skin 设计模式，
-//! 用纯 Rust 重构 MCP 工具的注册与发现机制。
+//! 借鉴 CLI-Anything 的 registry.json / SKILL.md 设计模式，
+//! 为 rmcp 工具提供**统一的元数据索引与目录发现能力**。
 //!
 //! 设计文档：docs/2026-06-24_重构设计文档/04-MCP增强设计.md
 //!
-//! 本模块为骨架，定义核心 trait 与数据结构。
-//! 现有 `tools/` 目录的工具后续逐个适配 `McpTool` trait 后注册到 `ToolRegistry`，
-//! 最终 `server.rs::build_service` 改为从 `ToolRegistry::all_routes()` 取 routes。
+//! # 架构定位（重要）
+//! 本模块**不替代** rmcp 原生的工具注册（ToolBase + AsyncTool + ToolRouter）。
+//! 现有工具继续用 rmcp 原生 trait 注册到 `tools/mod.rs::all_routes()`。
+//! 本模块只负责：
+//!   1. 收集所有工具的**元数据**（name/category/description），形成可查询的目录
+//!   2. 提供 `list_tools_catalog` / `describe_tool` 元工具，让 MCP 客户端先发现再调用
+//!
+//! 这样既借鉴了 CLI-Anything 的 registry 模式（catalog 发现），
+//! 又不破坏 rmcp 的原生工具集成（避免双 trait 并行的重复与冲突）。
 
-use std::pin::Pin;
-
-use rmcp::handler::server::router::tool::ToolRoute;
+use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::mcp::server::McpServer;
-
-/// 异步 invoke 的返回类型（Box 化 Future，保证 trait 是 object-safe）。
-pub type InvokeFuture =
-    Pin<Box<dyn Future<Output = Result<serde_json::Value, McpError>> + Send>>;
-
 /// 工具分类（借鉴 CLI-Anything category 矩阵）
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
 pub enum ToolCategory {
     /// 浏览器环境
     Environment,
@@ -35,17 +33,35 @@ pub enum ToolCategory {
     Tag,
     /// 分组
     Group,
+    /// 环境增强操作（批量/启动/指纹等）
+    EnvironmentExtras,
     /// 系统元工具（catalog/describe，借鉴 cli-hub-meta-skill 自描述发现）
     System,
+}
+
+impl ToolCategory {
+    /// 分类的人类可读名
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Environment => "environment",
+            Self::Proxy => "proxy",
+            Self::Workspace => "workspace",
+            Self::BrowserKernel => "browser_kernel",
+            Self::Tag => "tag",
+            Self::Group => "group",
+            Self::EnvironmentExtras => "environment_extras",
+            Self::System => "system",
+        }
+    }
 }
 
 /// 工具元数据（借鉴 CLI-Anything registry.json 条目）
 ///
 /// 每个工具在注册表中对应一个 `ToolEntry`，承载 name/display_name/description/category。
 /// description 采用 SKILL.md 风格的分层描述（概览 / 参数 / 示例 / 限制），提升 LLM 调用准确率。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ToolEntry {
-    /// 工具唯一标识，MCP 客户端据此调用
+    /// 工具唯一标识（与 rmcp ToolBase::name 对齐，如 simprint_list_tags）
     pub name: String,
     /// 展示名称（人类可读）
     pub display_name: String,
@@ -57,125 +73,76 @@ pub struct ToolEntry {
     pub version: String,
 }
 
-/// 工具调用会话上下文（借鉴 CLI-Anything utils/sqlite session）
-///
-/// 承载跨调用的上下文信息（鉴权、本地 API 地址等），
-/// 若未来需要"当前工程/最近操作/撤销栈"等有状态信息，在此扩展。
-#[derive(Debug, Clone)]
-pub struct Session {
-    /// 用户 access_token（经 LocalApiBridge 鉴权用）
-    pub access_token: Option<String>,
-    /// Local API 的 api_key
-    pub api_key: String,
-    /// Local API 基地址
-    pub local_api_base: String,
-}
-
-/// MCP 错误归一化（repl_skin 模式：统一错误格式）
-///
-/// 所有工具的 `invoke` 失败统一归一为此枚举，
-/// 避免各工具各自定义错误类型导致的格式不一致。
-#[derive(Debug, thiserror::Error, Serialize)]
-pub enum McpError {
-    #[error("参数无效: {0}")]
-    InvalidParams(String),
-    #[error("鉴权失败")]
-    Unauthorized,
-    #[error("资源未找到: {0}")]
-    NotFound(String),
-    #[error("Local API 调用失败: {0}")]
-    LocalApiFailed(String),
-    #[error("内部错误: {0}")]
-    Internal(String),
-}
-
-/// 统一适配 trait（借鉴 repl_skin，所有工具走同一管线）
-///
-/// 每个工具实现此 trait 后注册到 `ToolRegistry`。
-/// 统一管线：参数解析 → 鉴权校验 → 执行 → 结果序列化 → 错误归一化。
-///
-/// # object-safe 说明
-/// invoke 返回 `InvokeFuture`（Box 化 Future）而非 `impl Future`，
-/// 因此本 trait 是 object-safe 的，可以用 `Box<dyn McpTool>`。
-///
-/// # 生命周期（新增工具规范，借鉴 HARNESS.md SOP）
-/// 1. 识别能力：明确工具做什么、输入输出
-/// 2. 定义接口：实现 `meta()` 返回 `ToolEntry`
-/// 3. 实现适配层：实现 `invoke()`（走 LocalApiBridge）
-/// 4. 生成 schema：由 schemars 自动生成参数 JSON Schema
-/// 5. 注册入表：在 `build_registry()` 中注册
-pub trait McpTool: Send + Sync {
-    /// 工具元数据
-    fn meta(&self) -> &ToolEntry;
-
-    /// 执行工具调用（统一管线：参数解析→鉴权→执行→序列化→错误归一化）
-    ///
-    /// 实现时用 `Box::pin(async move { ... })` 包装异步逻辑。
-    fn invoke(&self, ctx: &Session, args: serde_json::Value) -> InvokeFuture;
+impl ToolEntry {
+    /// 便捷构造
+    pub fn new(
+        name: impl Into<String>,
+        display_name: impl Into<String>,
+        description: impl Into<String>,
+        category: ToolCategory,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            display_name: display_name.into(),
+            description: description.into(),
+            category,
+            version: "1.0".to_string(),
+        }
+    }
 }
 
 /// 工具注册表（借鉴 CLI-Anything registry 注册表）
 ///
-/// 替代原 `tools/mod.rs::all_routes()` 的硬编码聚合。
-/// 新增工具只需实现 `McpTool` trait 并调用 `register()`，无需改 `all_routes()`。
+/// 纯元数据索引：收集各模块导出的 `metadata()`，支持目录查询。
+/// 不持有工具的可调用句柄（调用仍走 rmcp 原生 ToolBase/AsyncTool）。
 pub struct ToolRegistry {
-    tools: Vec<Box<dyn McpTool>>,
+    entries: Vec<ToolEntry>,
 }
 
 impl ToolRegistry {
     /// 创建空注册表
     pub fn new() -> Self {
-        Self { tools: Vec::new() }
+        Self { entries: Vec::new() }
     }
 
-    /// 注册工具
-    pub fn register(&mut self, tool: Box<dyn McpTool>) {
-        self.tools.push(tool);
+    /// 注册一条元数据
+    pub fn register(&mut self, entry: ToolEntry) {
+        self.entries.push(entry);
     }
 
-    /// 生成所有 rmcp routes（替代原 all_routes 硬编码）
-    ///
-    /// 注意：当前为骨架，返回空 Vec。
-    /// 正式实现时迭代 `self.tools`，为每个工具构建 `ToolRoute<McpServer>`。
-    /// 构建逻辑依赖 rmcp 的 macros + schemars 自动生成 Tool 定义。
-    pub fn all_routes(&self) -> Vec<ToolRoute<McpServer>> {
-        // TODO: 迭代 self.tools，为每个工具构建 ToolRoute
-        // 当前骨架返回空，现有 tools/mod.rs::all_routes() 仍负责实际路由
-        Vec::new()
+    /// 批量注册
+    pub fn register_all(&mut self, entries: impl IntoIterator<Item = ToolEntry>) {
+        self.entries.extend(entries);
     }
 
-    /// 元工具：列出工具目录（借鉴 cli-hub-meta-skill 自描述发现）
+    /// 元工具用：列出全部工具目录（借鉴 cli-hub-meta-skill 自描述发现）
     ///
     /// 返回所有工具的元数据，供 MCP 客户端先发现再调用。
-    pub fn list_catalog(&self) -> Vec<ToolEntry> {
-        self.tools.iter().map(|t| t.meta().clone()).collect()
+    pub fn list_catalog(&self) -> &[ToolEntry] {
+        &self.entries
     }
 
     /// 按分类查询（借鉴 cli-hub-matrix 矩阵模式）
-    pub fn by_category(&self, cat: &ToolCategory) -> Vec<&dyn McpTool> {
-        self.tools
+    pub fn by_category(&self, cat: &ToolCategory) -> Vec<&ToolEntry> {
+        self.entries
             .iter()
-            .filter(|t| &t.meta().category == cat)
-            .map(|t| t.as_ref())
+            .filter(|e| &e.category == cat)
             .collect()
     }
 
     /// 按 name 查询（describe_tool 元工具用）
-    pub fn describe(&self, name: &str) -> Option<&dyn McpTool> {
-        self.tools
-            .iter()
-            .find(|t| t.meta().name == name)
-            .map(|t| t.as_ref())
+    pub fn describe(&self, name: &str) -> Option<&ToolEntry> {
+        self.entries.iter().find(|e| e.name == name)
     }
 
     /// 工具总数
     pub fn len(&self) -> usize {
-        self.tools.len()
+        self.entries.len()
     }
 
     /// 是否为空
     pub fn is_empty(&self) -> bool {
-        self.tools.is_empty()
+        self.entries.is_empty()
     }
 }
 
@@ -185,22 +152,25 @@ impl Default for ToolRegistry {
     }
 }
 
-/// 构建注册表（替代 tools/mod.rs::all_routes）
+/// 构建全局工具注册表（聚合各模块 metadata）
 ///
-/// 现有 7 个工具模块（browser_kernels/environments/environments_extras/groups/proxies/tags/workspaces）
-/// 后续逐个适配 `McpTool` trait 后在此函数注册。
-/// 元工具（list_tools_catalog / describe_tool）也在此注册。
+/// 各模块在 `tools/*.rs` 导出 `pub fn metadata() -> Vec<ToolEntry>`，
+/// 本函数聚合它们 + 元工具自身。
+/// 配合 catalog.rs 的 ListCatalogTool / DescribeToolTool 使用。
 pub fn build_registry() -> ToolRegistry {
-    let reg = ToolRegistry::new();
+    let mut reg = ToolRegistry::new();
 
-    // TODO: 注册现有 7 模块工具（适配 McpTool trait 后）
-    // reg.register(Box::new(builtins::environments::ListEnvironmentsTool));
-    // reg.register(Box::new(builtins::environments::CreateEnvironmentTool));
-    // ...
+    // 业务工具元数据（各模块导出）
+    reg.register_all(crate::mcp::tools::browser_kernels::metadata());
+    reg.register_all(crate::mcp::tools::environments::metadata());
+    reg.register_all(crate::mcp::tools::environments_extras::metadata());
+    reg.register_all(crate::mcp::tools::groups::metadata());
+    reg.register_all(crate::mcp::tools::proxies::metadata());
+    reg.register_all(crate::mcp::tools::tags::metadata());
+    reg.register_all(crate::mcp::tools::workspaces::metadata());
 
-    // TODO: 注册元工具（自描述发现）
-    // reg.register(Box::new(builtins::meta::ListCatalogTool));
-    // reg.register(Box::new(builtins::meta::DescribeToolTool));
+    // 元工具自身（自描述发现）
+    reg.register_all(crate::mcp::catalog::metadata());
 
     reg
 }

@@ -14,10 +14,26 @@ use crate::{
     mcp::{
         bridge::{LocalApiEnvironmentListFilters, LocalApiListEnvironmentsRequest},
         error::McpToolError,
+        registry::ToolEntry,
         server::McpServer,
     },
     services::environment::BatchLaunchResult,
 };
+
+/// 导出本模块工具的元数据（供 registry 索引，不参与 rmcp 调用）
+pub fn metadata() -> Vec<ToolEntry> {
+    use crate::mcp::registry::ToolCategory;
+    vec![
+        ToolEntry::new("simprint_list_environments", "列出环境", "List Simprint environments with optional filters.", ToolCategory::Environment),
+        ToolEntry::new("simprint_get_environment", "获取环境", "Get a Simprint environment by UUID.", ToolCategory::Environment),
+        ToolEntry::new("simprint_start_environment", "启动环境", "Start a Simprint environment by UUID.", ToolCategory::Environment),
+        ToolEntry::new("simprint_stop_environment", "停止环境", "Stop a Simprint environment by UUID.", ToolCategory::Environment),
+        ToolEntry::new("simprint_batch_start_environments", "批量启动环境", "Start multiple Simprint environments by UUID.", ToolCategory::Environment),
+        ToolEntry::new("simprint_batch_stop_environments", "批量停止环境", "Stop multiple Simprint environments by UUID.", ToolCategory::Environment),
+        ToolEntry::new("simprint_get_environment_status", "获取环境状态", "Get the runtime status of a Simprint environment.", ToolCategory::Environment),
+        ToolEntry::new("simprint_get_environment_cdp_endpoint", "获取CDP端点", "Get the CDP endpoint of a running Simprint environment.", ToolCategory::Environment),
+    ]
+}
 
 pub fn routes() -> Vec<ToolRoute<McpServer>> {
     ToolRouter::new()

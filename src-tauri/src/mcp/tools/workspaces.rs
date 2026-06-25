@@ -8,8 +8,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     local_api::entitys::{LocalApiWorkspaceDetail, LocalApiWorkspaceItem},
-    mcp::{error::McpToolError, server::McpServer},
+    mcp::{error::McpToolError, registry::ToolEntry, server::McpServer},
 };
+
+/// 导出本模块工具的元数据（供 registry 索引，不参与 rmcp 调用）
+pub fn metadata() -> Vec<ToolEntry> {
+    use crate::mcp::registry::ToolCategory;
+    vec![
+        ToolEntry::new("simprint_list_workspaces", "列出工作区", "List Simprint workspaces and indicate the current workspace.", ToolCategory::Workspace),
+        ToolEntry::new("simprint_get_workspace", "获取工作区", "Get a Simprint workspace by UUID.", ToolCategory::Workspace),
+        ToolEntry::new("simprint_switch_workspace", "切换工作区", "Switch the current Simprint workspace by UUID.", ToolCategory::Workspace),
+    ]
+}
 
 pub fn routes() -> Vec<ToolRoute<McpServer>> {
     ToolRouter::new()

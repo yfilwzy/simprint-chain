@@ -15,9 +15,46 @@ use crate::{
     mcp::{
         bridge::{LocalApiEnvironmentListFilters, LocalApiListEnvironmentsRequest},
         error::McpToolError,
+        registry::ToolEntry,
         server::McpServer,
     },
 };
+
+/// 导出本模块工具的元数据（供 registry 索引，不参与 rmcp 调用）
+///
+/// 环境增强操作：创建/更新/删除、批量操作、Cookie/URL/标签/代理/账号管理、回收站。
+pub fn metadata() -> Vec<ToolEntry> {
+    use crate::mcp::registry::ToolCategory;
+    let cat = ToolCategory::EnvironmentExtras;
+    vec![
+        ToolEntry::new("simprint_batch_get_environments", "批量获取环境", "Batch get Simprint environments by UUID list.", cat.clone()),
+        ToolEntry::new("simprint_create_environment", "创建环境", "Create a Simprint environment.", cat.clone()),
+        ToolEntry::new("simprint_update_environment", "更新环境", "Update a Simprint environment.", cat.clone()),
+        ToolEntry::new("simprint_delete_environment", "删除环境(进回收站)", "Delete a Simprint environment (move to recycle bin).", cat.clone()),
+        ToolEntry::new("simprint_permanent_delete_environment", "永久删除环境", "Permanently delete a Simprint environment.", cat.clone()),
+        ToolEntry::new("simprint_batch_delete_environments", "批量删除环境", "Batch delete Simprint environments.", cat.clone()),
+        ToolEntry::new("simprint_batch_permanent_delete_environments", "批量永久删除环境", "Batch permanently delete Simprint environments.", cat.clone()),
+        ToolEntry::new("simprint_restore_environment", "恢复环境", "Restore a Simprint environment from recycle bin.", cat.clone()),
+        ToolEntry::new("simprint_batch_restore_environments", "批量恢复环境", "Batch restore Simprint environments.", cat.clone()),
+        ToolEntry::new("simprint_list_recycle_bin_environments", "列出回收站环境", "List environments in the recycle bin.", cat.clone()),
+        ToolEntry::new("simprint_move_environment_to_group", "移动到分组", "Move a Simprint environment to a group.", cat.clone()),
+        ToolEntry::new("simprint_batch_move_environments_to_group", "批量移动到分组", "Batch move Simprint environments to a group.", cat.clone()),
+        ToolEntry::new("simprint_set_environment_proxy", "设置环境代理", "Set the proxy of a Simprint environment.", cat.clone()),
+        ToolEntry::new("simprint_set_environment_accounts", "设置环境账号", "Set the accounts of a Simprint environment.", cat.clone()),
+        ToolEntry::new("simprint_assign_environment_tags", "分配标签", "Assign tags to a Simprint environment.", cat.clone()),
+        ToolEntry::new("simprint_remove_environment_tag", "移除标签", "Remove a tag from a Simprint environment.", cat.clone()),
+        ToolEntry::new("simprint_batch_assign_environment_tags", "批量分配标签", "Batch assign tags to Simprint environments.", cat.clone()),
+        ToolEntry::new("simprint_batch_remove_environment_tags", "批量移除标签", "Batch remove tags from Simprint environments.", cat.clone()),
+        ToolEntry::new("simprint_list_environment_cookies", "列出Cookie", "List cookies of a Simprint environment.", cat.clone()),
+        ToolEntry::new("simprint_add_environment_cookie", "添加Cookie", "Add a cookie to a Simprint environment.", cat.clone()),
+        ToolEntry::new("simprint_delete_environment_cookie", "删除Cookie", "Delete a cookie from a Simprint environment.", cat.clone()),
+        ToolEntry::new("simprint_clear_environment_cookies", "清空Cookie", "Clear all cookies of a Simprint environment.", cat.clone()),
+        ToolEntry::new("simprint_list_environment_urls", "列出URL", "List URLs of a Simprint environment.", cat.clone()),
+        ToolEntry::new("simprint_add_environment_url", "添加URL", "Add a URL to a Simprint environment.", cat.clone()),
+        ToolEntry::new("simprint_delete_environment_url", "删除URL", "Delete a URL from a Simprint environment.", cat.clone()),
+        ToolEntry::new("simprint_clear_environment_urls", "清空URL", "Clear all URLs of a Simprint environment.", cat),
+    ]
+}
 
 pub fn routes() -> Vec<ToolRoute<McpServer>> {
     ToolRouter::new()

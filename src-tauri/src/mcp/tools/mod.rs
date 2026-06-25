@@ -19,5 +19,7 @@ pub fn all_routes() -> Vec<ToolRoute<McpServer>> {
     routes.extend(proxies::routes());
     routes.extend(tags::routes());
     routes.extend(workspaces::routes());
+    // 元工具（catalog 自描述发现）
+    routes.extend(crate::mcp::catalog::routes());
     routes
 }

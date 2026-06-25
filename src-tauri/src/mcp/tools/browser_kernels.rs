@@ -8,8 +8,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     local_api::entitys::LocalApiBrowserKernelVersion,
-    mcp::{bridge::LocalApiListBrowserKernelsRequest, error::McpToolError, server::McpServer},
+    mcp::{bridge::LocalApiListBrowserKernelsRequest, error::McpToolError, registry::ToolEntry, server::McpServer},
 };
+
+/// 导出本模块工具的元数据（供 registry 索引，不参与 rmcp 调用）
+pub fn metadata() -> Vec<ToolEntry> {
+    use crate::mcp::registry::ToolCategory;
+    vec![ToolEntry::new(
+        "simprint_list_browser_kernels",
+        "列出浏览器内核版本",
+        "List Simprint browser kernel versions by platform or kernel type.",
+        ToolCategory::BrowserKernel,
+    )]
+}
 
 pub fn routes() -> Vec<ToolRoute<McpServer>> {
     ToolRouter::new()
