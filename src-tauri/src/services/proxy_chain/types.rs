@@ -7,10 +7,25 @@ pub const DEFAULT_TEST_URL: &str = "https://www.gstatic.com/generate_204";
 pub const DEFAULT_EXTERNAL_CONTROLLER: &str = "127.0.0.1:9090";
 pub const DEFAULT_PLACEHOLDER_SECRET: &str = "CHANGE_ME_PROXY_CHAIN_SECRET";
 
+/// 代理链模式。
+///
+/// - `Direct`：机场订阅直连。浏览器 → 本地 Mihomo → 机场节点（直接出口）。
+///   PROXY 组直接由机场节点组成，无 dialer-proxy。适合目标网站不查落地 IP 的场景。
+/// - `LandingChain`（默认）：机场订阅加落地代理。浏览器 → 本地 Mihomo → 机场节点（第一跳）
+///   → 落地 SOCKS5（最终出口）。目标网站看到落地 IP，落地服务器经机场节点到达。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyChainMode {
+    Direct,
+    #[default]
+    LandingChain,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProxyChainConfig {
     pub version: u32,
+    pub mode: ProxyChainMode,
     pub subscriptions: Vec<ProxySubscription>,
     pub landing_socks: Vec<LandingSocksConfig>,
     pub policies: Vec<ProxyPolicy>,
@@ -22,6 +37,7 @@ impl Default for ProxyChainConfig {
     fn default() -> Self {
         Self {
             version: CONFIG_VERSION,
+            mode: ProxyChainMode::default(),
             subscriptions: Vec::new(),
             landing_socks: Vec::new(),
             policies: vec![ProxyPolicy::default_select()],

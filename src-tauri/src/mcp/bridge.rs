@@ -648,6 +648,15 @@ impl LocalApiBridge {
         let payload = serde_json::to_value(payload)
             .map_err(|error| McpToolError::internal(error.to_string()))?;
 
+        // 破限本地版：优先用本地拦截器处理（环境/分组/标签/代理等数据已本地化），
+        // 命中则直接反序列化返回；未命中（如 workspaces 等本地无对应数据的端点）才走远程。
+        if let Some(result) = crate::local_interceptor::try_intercept(server_path, Some(&payload)) {
+            let response = result.map_err(McpToolError::internal)?;
+            let data = response.data.unwrap_or(serde_json::Value::Null);
+            return serde_json::from_value::<T>(data)
+                .map_err(|error| McpToolError::internal(format!("本地响应反序列化失败: {error}")));
+        }
+
         proxy_data_request::<T>(server_path, permission_code, &self.api_key, payload)
             .await
             .map_err(map_proxy_error)

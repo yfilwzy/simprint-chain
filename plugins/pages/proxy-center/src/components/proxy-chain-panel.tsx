@@ -16,6 +16,7 @@ import {
   stopProxyChain,
   testProxyChain,
   upsertProxyChain,
+  type ProxyChainMode,
   type ProxyChainStrategy,
   updateAllProxyChainSubscriptions,
   type ProxyChainSummary,
@@ -26,6 +27,7 @@ interface ChainFormState {
   id?: string;
   name: string;
   description: string;
+  mode: ProxyChainMode;
   strategy: ProxyChainStrategy;
   subscriptionLines: string;
   landingHost: string;
@@ -37,6 +39,7 @@ interface ChainFormState {
 const emptyForm: ChainFormState = {
   name: '链式代理-落地IP',
   description: '',
+  mode: 'landing_chain',
   strategy: 'auto_fastest',
   subscriptionLines: '',
   landingHost: '',
@@ -114,6 +117,7 @@ export function ProxyChainPanel() {
       id: selected.id,
       name: selected.name,
       description: selected.description || '',
+      mode: selected.mode || 'landing_chain',
       strategy: selected.strategy,
       landingHost: selected.landing_host,
       landingPort: String(selected.landing_port),
@@ -135,16 +139,20 @@ export function ProxyChainPanel() {
         id: form.id,
         name: form.name,
         description: form.description || undefined,
+        mode: form.mode,
         strategy: form.strategy,
         subscriptions: subscriptions.length ? subscriptions : selected?.health ? [] : subscriptions,
-        landing: {
-          host: form.landingHost,
-          port: Number(form.landingPort),
-          username: form.landingUsername || undefined,
-          password: form.landingPassword || undefined,
-        },
+        // 直连模式无需落地代理；落地链模式才传落地配置
+        landing: form.mode === 'direct'
+          ? undefined
+          : {
+              host: form.landingHost,
+              port: Number(form.landingPort),
+              username: form.landingUsername || undefined,
+              password: form.landingPassword || undefined,
+            },
       });
-      toast.success('链式代理已保存');
+      toast.success(form.mode === 'direct' ? '机场订阅直连已保存' : '链式代理已保存');
       await refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '保存失败');
@@ -193,8 +201,8 @@ export function ProxyChainPanel() {
       <aside className="w-80 border-r border-border p-4 space-y-3 overflow-y-auto">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-sm font-semibold flex items-center gap-2"><Route className="h-4 w-4" />链式代理</h2>
-            <p className="text-xs text-muted-foreground mt-1">多机场优选 → 落地 SOCKS5</p>
+            <h2 className="text-sm font-semibold flex items-center gap-2"><Route className="h-4 w-4" />代理中心</h2>
+            <p className="text-xs text-muted-foreground mt-1">机场订阅直连 / 机场订阅加落地代理</p>
           </div>
           <Button variant="outline" size="sm" onClick={refresh} disabled={loading}><RefreshCcw className="h-3.5 w-3.5" /></Button>
         </div>
@@ -227,6 +235,29 @@ export function ProxyChainPanel() {
         <Card>
           <CardHeader className="pb-3"><CardTitle className="text-base flex items-center gap-2"><ShieldCheck className="h-4 w-4" />链路配置</CardTitle></CardHeader>
           <CardContent className="space-y-4">
+            {/* 代理模式切换 */}
+            <div className="rounded-lg border border-border p-3 space-y-2">
+              <div className="text-xs font-medium text-foreground">代理模式</div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, mode: 'direct' })}
+                  className={`rounded-md border p-3 text-left transition-colors ${form.mode === 'direct' ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/60'}`}
+                >
+                  <div className="text-xs font-semibold text-foreground">机场订阅直连</div>
+                  <div className="mt-1 text-[11px] text-muted-foreground leading-relaxed">浏览器 → 本地 Mihomo → 机场节点直接出口。适合不查落地 IP 的场景。</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, mode: 'landing_chain' })}
+                  className={`rounded-md border p-3 text-left transition-colors ${form.mode === 'landing_chain' ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/60'}`}
+                >
+                  <div className="text-xs font-semibold text-foreground">机场订阅加落地代理</div>
+                  <div className="mt-1 text-[11px] text-muted-foreground leading-relaxed">机场节点做第一跳 → 落地 SOCKS5 做最终出口。目标网站看到落地 IP。</div>
+                </button>
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <Input placeholder="名称" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               <Select value={form.strategy} onValueChange={(value) => setForm({ ...form, strategy: value as ProxyChainStrategy })}>
@@ -239,12 +270,19 @@ export function ProxyChainPanel() {
               </Select>
             </div>
             <Input placeholder="备注" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-            <div className="grid grid-cols-4 gap-3">
-              <Input className="col-span-2" placeholder="落地 SOCKS5 Host" value={form.landingHost} onChange={(e) => setForm({ ...form, landingHost: e.target.value })} />
-              <Input placeholder="端口" value={form.landingPort} onChange={(e) => setForm({ ...form, landingPort: e.target.value })} />
-              <Input placeholder="用户名" value={form.landingUsername} onChange={(e) => setForm({ ...form, landingUsername: e.target.value })} />
-            </div>
-            <Input type="password" placeholder={selected?.landing_password_set ? '已保存密码；留空则保持不变' : '落地 SOCKS5 密码'} value={form.landingPassword} onChange={(e) => setForm({ ...form, landingPassword: e.target.value })} />
+
+            {/* 落地代理配置：仅落地链模式显示 */}
+            {form.mode === 'landing_chain' && (
+              <>
+                <div className="grid grid-cols-4 gap-3">
+                  <Input className="col-span-2" placeholder="落地 SOCKS5 Host" value={form.landingHost} onChange={(e) => setForm({ ...form, landingHost: e.target.value })} />
+                  <Input placeholder="端口" value={form.landingPort} onChange={(e) => setForm({ ...form, landingPort: e.target.value })} />
+                  <Input placeholder="用户名" value={form.landingUsername} onChange={(e) => setForm({ ...form, landingUsername: e.target.value })} />
+                </div>
+                <Input type="password" placeholder={selected?.landing_password_set ? '已保存密码；留空则保持不变' : '落地 SOCKS5 密码'} value={form.landingPassword} onChange={(e) => setForm({ ...form, landingPassword: e.target.value })} />
+              </>
+            )}
+
             <Textarea
               className="min-h-28 font-mono text-xs"
               placeholder={'机场订阅，每行一个：名称|订阅URL\n例如：机场A|https://example.com/sub?token=***'}

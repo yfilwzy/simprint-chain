@@ -2,6 +2,7 @@ use tauri::ipc::Invoke;
 
 pub mod app;
 pub mod auth;
+pub mod backup;
 pub mod environment;
 pub mod file_system;
 pub mod local_api;
@@ -128,5 +129,9 @@ pub fn register_handles() -> impl Fn(Invoke<tauri::Wry>) -> bool + Send + Sync +
         // Store commands
         store::get_store_key,
         store::set_store_key,
+        // 备份 / 导入 / 导出
+        backup::get_database_info,
+        backup::export_database,
+        backup::import_database,
     ]
 }

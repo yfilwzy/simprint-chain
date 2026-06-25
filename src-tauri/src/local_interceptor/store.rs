@@ -1,7 +1,7 @@
 //! 本地 SQLite 存储层（破限本地化）
 //!
 //! 持久化环境/分组/标签数据，绕过 main server 配额限制。
-//! 数据库路径：app_data_dir/Simprint/local_data.db
+//! 数据库路径：D:\Simprint\data\local_data.db（Windows，破限本地版默认 D 盘）。
 
 use std::sync::Mutex;
 
@@ -12,6 +12,8 @@ use uuid::Uuid;
 /// 本地存储（线程安全的 SQLite 连接）
 pub struct LocalStore {
     conn: Mutex<Connection>,
+    /// 当前数据库文件路径（供备份/导入等功能读取）
+    db_path: std::path::PathBuf,
 }
 
 impl LocalStore {
@@ -41,7 +43,23 @@ impl LocalStore {
 
         Ok(Self {
             conn: Mutex::new(conn),
+            db_path: db_path.to_path_buf(),
         })
+    }
+
+    /// 返回当前数据库文件路径（供备份/导入等功能读取）。
+    pub fn db_path(&self) -> &std::path::Path {
+        &self.db_path
+    }
+
+    /// 强制 WAL 检查点（TRUNCATE），将未写入主库的 WAL 数据刷盘。
+    ///
+    /// 导出备份前调用，确保备份副本包含全部已提交数据。
+    pub fn checkpoint(&self) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// 建表
@@ -459,18 +477,80 @@ fn row_to_environment_item(row: &rusqlite::Row) -> rusqlite::Result<Value> {
     }))
 }
 
-/// 解析本地数据库路径：app_data_dir/Simprint/local_data.db
+/// 解析本地数据库路径。
+///
+/// 破限本地版统一到 PathManager 的根目录体系：
+/// - Windows：`D:\Simprint\data\local_data.db`（D 盘可用时）
+/// - 环境变量 `SIMPRINT_DATA_DIR` 可覆盖根目录
+/// - macOS/Linux：`~/.config/Simprint/data/local_data.db`
+///
+/// 首次在新路径打开前，会检测旧的 C 盘 ProjectDirs 路径是否存在数据，
+/// 若存在且新路径尚无数据，则自动一次性迁移（含 -wal/-shm 边文件）。
 fn resolve_db_path() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
-    use directories::ProjectDirs;
+    // 1. 计算新路径（统一走 PathManager 根目录）
+    let new_root = crate::core::paths::PathManager::get_default_root_dir()?;
+    let new_data_dir = new_root.join("data");
+    let new_db_path = new_data_dir.join("local_data.db");
 
-    // 优先用 Simprint 的 app data 目录
-    if let Some(proj_dirs) = ProjectDirs::from("com", "lius", "Simprint") {
-        let data_dir = proj_dirs.data_dir();
-        return Ok(data_dir.join("local_data.db"));
+    // 2. 一次性迁移：若新路径不存在数据库，且旧 C 盘 ProjectDirs 路径存在，则迁移
+    if !new_db_path.exists() {
+        migrate_legacy_db_if_any(&new_data_dir, &new_db_path);
     }
 
-    // 回退：当前目录
-    Ok(std::path::PathBuf::from("local_data.db"))
+    Ok(new_db_path)
+}
+
+/// 迁移旧版本（C 盘 ProjectDirs 路径）的本地数据库到新路径。
+///
+/// 旧路径：`%APPDATA%\lius\Simprint\data\local_data.db`（Windows）或对应 macOS/Linux 路径。
+/// 仅在新路径不存在数据库时执行一次，迁移后旧文件保留（用户可手动清理）。
+fn migrate_legacy_db_if_any(new_data_dir: &std::path::Path, new_db_path: &std::path::Path) {
+    use directories::ProjectDirs;
+
+    let legacy_db = ProjectDirs::from("com", "lius", "Simprint")
+        .map(|proj_dirs| proj_dirs.data_dir().join("local_data.db"));
+
+    let Some(legacy_path) = legacy_db else {
+        return;
+    };
+
+    if !legacy_path.exists() || legacy_path == *new_db_path {
+        return;
+    }
+
+    log::info!(
+        "[LocalStore] 检测到旧路径数据库，开始一次性迁移：{} → {}",
+        legacy_path.display(),
+        new_db_path.display()
+    );
+
+    if let Err(e) = std::fs::create_dir_all(new_data_dir) {
+        log::warn!("[LocalStore] 迁移失败：无法创建目标目录 {}: {}", new_data_dir.display(), e);
+        return;
+    }
+
+    // 迁移主库 + WAL 边文件（若存在）
+    let sidecar_exts = ["-wal", "-shm"];
+    if let Err(e) = std::fs::copy(&legacy_path, new_db_path) {
+        log::warn!(
+            "[LocalStore] 迁移主库失败 {} → {}：{}",
+            legacy_path.display(),
+            new_db_path.display(),
+            e
+        );
+        return;
+    }
+    for ext in sidecar_exts {
+        let src = legacy_path.with_extension(format!("db{}", ext));
+        let dst = new_db_path.with_extension(format!("db{}", ext));
+        if src.exists() {
+            if let Err(e) = std::fs::copy(&src, &dst) {
+                log::warn!("[LocalStore] 迁移边文件 {} 失败：{}", src.display(), e);
+            }
+        }
+    }
+
+    log::info!("[LocalStore] 旧路径数据迁移完成（旧文件保留于 {}）", legacy_path.display());
 }
 
 #[cfg(test)]

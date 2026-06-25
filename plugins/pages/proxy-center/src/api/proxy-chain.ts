@@ -24,6 +24,7 @@ export interface ProxyChainSummary {
   id: string;
   name: string;
   description?: string | null;
+  mode: ProxyChainMode;
   subscriptions_count: number;
   enabled_subscriptions_count: number;
   landing_host: string;
@@ -76,6 +77,8 @@ export interface UpsertProxyChainInput {
   id?: string;
   name: string;
   description?: string;
+  /** 代理链模式：缺省 landing_chain 保持向后兼容 */
+  mode?: ProxyChainMode;
   subscriptions: Array<{
     id?: string;
     name: string;
@@ -84,7 +87,8 @@ export interface UpsertProxyChainInput {
     include_keywords?: string[];
     exclude_keywords?: string[];
   }>;
-  landing: {
+  /** 落地代理配置；直连模式下可为空 */
+  landing?: {
     host: string;
     port: number;
     username?: string;
@@ -125,8 +129,12 @@ export interface ProxyChainTestResult {
   error?: string | null;
 }
 
+/** 代理链模式：direct = 机场订阅直连；landing_chain = 机场订阅加落地代理 */
+export type ProxyChainMode = 'direct' | 'landing_chain';
+
 interface ProxyChainConfig {
   version: number;
+  mode: ProxyChainMode;
   subscriptions: ProxySubscription[];
   landing_socks: LandingSocksConfig[];
   policies: ProxyPolicy[];
@@ -328,6 +336,7 @@ function summaryFrom(config: ProxyChainConfig, runtime?: RuntimeStatus): ProxyCh
     id: DEFAULT_CHAIN_ID,
     name: policy.name && policy.name !== 'PROXY' ? policy.name : DEFAULT_CHAIN_NAME,
     description: null,
+    mode: config.mode || 'landing_chain',
     subscriptions_count: config.subscriptions.length,
     enabled_subscriptions_count: config.subscriptions.filter((item) => item.enabled).length,
     landing_host: landing.host || '',
@@ -432,12 +441,12 @@ export async function upsertProxyChain(input: UpsertProxyChainInput): Promise<Pr
   const landing: LandingSocksConfig = {
     id: landingId,
     name: previousLanding.name || '落地 SOCKS5',
-    host: input.landing.host?.trim() || previousLanding.host || '',
-    port: Number(input.landing.port || previousLanding.port || 443),
-    username: input.landing.username?.trim() || previousLanding.username || null,
-    password: input.landing.password?.length ? input.landing.password : previousLanding.password || null,
+    host: input.landing?.host?.trim() || previousLanding.host || '',
+    port: Number(input.landing?.port || previousLanding.port || 443),
+    username: input.landing?.username?.trim() || previousLanding.username || null,
+    password: input.landing?.password?.length ? input.landing.password : previousLanding.password || null,
     udp: previousLanding.udp ?? true,
-    enabled: Boolean(input.landing.host?.trim() || previousLanding.host),
+    enabled: Boolean(input.landing?.host?.trim() || previousLanding.host),
   };
 
   const policy: ProxyPolicy = {
@@ -453,6 +462,7 @@ export async function upsertProxyChain(input: UpsertProxyChainInput): Promise<Pr
 
   const config: ProxyChainConfig = {
     ...existing,
+    mode: input.mode || existing.mode || 'landing_chain',
     subscriptions,
     landing_socks: [landing],
     policies: [policy],

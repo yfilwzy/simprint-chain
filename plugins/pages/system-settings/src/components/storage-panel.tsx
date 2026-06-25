@@ -15,6 +15,8 @@ import {
   RotateCcw,
   Loader2,
   X,
+  Upload,
+  DatabaseBackup,
 } from 'lucide-react';
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@/lib/tauri';
@@ -97,6 +99,11 @@ export const StoragePanel: React.FC = () => {
   const [hasUpdate, setHasUpdate] = useState(false);
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateChecked, setUpdateChecked] = useState(false);
+
+  // 数据备份相关状态
+  const [dbInfo, setDbInfo] = useState<{ path: string; size_bytes: number; exists: boolean } | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [importConfirmOpen, setImportConfirmOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -273,6 +280,52 @@ export const StoragePanel: React.FC = () => {
     if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
     return `${Math.round(mb)} MB`;
   };
+
+  // 数据备份：加载数据库信息
+  const refreshDbInfo = useCallback(async () => {
+    try {
+      const info = await invoke<{ path: string; size_bytes: number; exists: boolean }>('get_database_info');
+      setDbInfo(info);
+    } catch {
+      setDbInfo(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshDbInfo();
+  }, [refreshDbInfo]);
+
+  // 导出数据库
+  const handleExportDatabase = useCallback(async () => {
+    setBackupBusy(true);
+    try {
+      const targetPath = await invoke<string>('export_database');
+      toast.success(`数据已导出到：${targetPath}`);
+      await refreshDbInfo();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '导出失败');
+    } finally {
+      setBackupBusy(false);
+    }
+  }, [refreshDbInfo]);
+
+  // 导入数据库（先弹确认框）
+  const handleImportDatabase = useCallback(async () => {
+    setImportConfirmOpen(false);
+    setBackupBusy(true);
+    try {
+      const msg = await invoke<string>('import_database');
+      toast.success(msg);
+      // 导入后需重启应用以重建数据库连接
+      toast.info('即将重启应用以加载导入的数据');
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await relaunch();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '导入失败');
+    } finally {
+      setBackupBusy(false);
+    }
+  }, []);
 
   const formatUpdatedAt = (timestamp: number) =>
     new Date(timestamp).toLocaleString(undefined, {
@@ -455,6 +508,95 @@ export const StoragePanel: React.FC = () => {
                 {t('storageRestoreDefaults')}
               </>
             )}
+          </Button>
+        </FormattedDialogFooter>
+      </FormattedDialog>
+
+      {/* 数据备份 / 导入 / 导出 */}
+      <SettingCard title="数据备份" icon={DatabaseBackup}>
+        <div className="space-y-3 p-4 bg-accent/20 rounded-lg mx-2 my-2">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-foreground">本地数据库备份</p>
+              <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
+                本地版所有环境、分组、标签数据存储于本地 SQLite 数据库。可导出备份到任意位置，或从备份文件导入恢复。
+              </p>
+            </div>
+            <Button size="sm" variant="outline" onClick={refreshDbInfo} disabled={backupBusy}>
+              <RefreshCcw className="h-3.5 w-3.5 mr-1.5" />
+              刷新
+            </Button>
+          </div>
+
+          {dbInfo && (
+            <div className="rounded-md border border-border p-3 text-xs space-y-1">
+              <div className="flex items-center gap-2">
+                <Database className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <span className="text-muted-foreground shrink-0">数据库路径：</span>
+                <span className="text-foreground truncate font-mono" title={dbInfo.path}>{dbInfo.path}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <FileBox className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <span className="text-muted-foreground shrink-0">文件大小：</span>
+                <span className="text-foreground">{formatSize(dbInfo.size_bytes)}</span>
+                <span className={`ml-1 text-[10px] px-1.5 py-0.5 rounded ${dbInfo.exists ? 'bg-emerald-500/10 text-emerald-600' : 'bg-destructive/10 text-destructive'}`}>
+                  {dbInfo.exists ? '存在' : '缺失'}
+                </span>
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <Button size="sm" onClick={handleExportDatabase} disabled={backupBusy}>
+              {backupBusy ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Download className="h-3.5 w-3.5 mr-1.5" />}
+              导出备份
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setImportConfirmOpen(true)} disabled={backupBusy}>
+              <Upload className="h-3.5 w-3.5 mr-1.5" />
+              导入数据
+            </Button>
+          </div>
+
+          <p className="text-[11px] text-muted-foreground leading-relaxed pt-1">
+            提示：导出会先执行数据检查点确保一致性；导入前会自动备份当前数据（保存为 .pre-import-*.bak），导入完成后需重启应用加载数据。
+          </p>
+        </div>
+      </SettingCard>
+
+      {/* 导入确认弹窗 */}
+      <FormattedDialog
+        open={importConfirmOpen}
+        onOpenChange={setImportConfirmOpen}
+        minWidth="min-w-[440px]"
+        header={{
+          icon: Upload,
+          title: '确认导入数据',
+          description: '导入将用所选文件替换当前所有本地数据。',
+        }}
+        contentPadding="p-5"
+      >
+        <p className="text-xs text-muted-foreground leading-relaxed mb-2">
+          导入操作会先自动备份当前数据库，然后用所选备份文件替换。导入完成后应用将自动重启以加载数据。此操作不可撤销，请确认。
+        </p>
+        <FormattedDialogFooter>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs"
+            onClick={() => setImportConfirmOpen(false)}
+            disabled={backupBusy}
+          >
+            <X className="h-4 w-4 mr-1.5" />
+            取消
+          </Button>
+          <Button
+            size="sm"
+            className="text-xs bg-destructive text-destructive-foreground hover:bg-destructive/90 border-0"
+            onClick={() => void handleImportDatabase()}
+            disabled={backupBusy}
+          >
+            <Upload className="h-4 w-4 mr-1.5" />
+            确认导入
           </Button>
         </FormattedDialogFooter>
       </FormattedDialog>

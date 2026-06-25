@@ -13,8 +13,6 @@ import {
   Puzzle,
   Users,
   UserCircle,
-  CreditCard,
-  Gift,
 } from 'lucide-react';
 import { TfiWorld } from "react-icons/tfi";
 import { BsWindowSidebar } from "react-icons/bs";
@@ -488,14 +486,12 @@ interface BottomNavItemsProps {
 
 /**
  * 底部导航项组件
- * 包含指纹审计、费用中心、推广计划
+ * 包含指纹审计
  */
 const BottomNavItems: React.FC<BottomNavItemsProps> = ({ collapsed, currentPath }) => {
   const { t } = useTranslation('appLayout');
   const bottomNavItems: NavItemData[] = [
     { label: t('nav.item.audit'), href: '/audit', icon: ShieldHalf },
-    { label: t('quota.billingCenter'), href: '/billing', icon: CreditCard },
-    { label: t('quota.referralProgram'), href: '/referral', icon: Gift },
   ];
 
   return (
