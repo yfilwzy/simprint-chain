@@ -81,6 +81,31 @@ pub fn is_login() -> bool {
 
 /// 获取/刷新服务器公钥（应用启动时或公钥过期时调用）
 /// 支持自动重试，最多重试 3 次
+/// 从服务器响应体提取纯 PEM 公钥字符串。
+///
+/// 兼容两种形态：
+///   1. 纯 PEM 文本（官方服务器，-----BEGIN RSA PUBLIC KEY-----...）
+///   2. JSON 包装（自托管服务器，{"public_key":"-----BEGIN RSA PUBLIC KEY-----..."}）。
+///      JSON 内 `\n` 会被 serde_json 自动还原为真实换行符。
+fn extract_public_key_from_body(body: &str) -> Option<String> {
+    let trimmed = body.trim();
+    // 形态 1：直接是 PEM
+    if trimmed.starts_with("-----BEGIN") {
+        return Some(trimmed.to_string());
+    }
+    // 形态 2：JSON 包装，解析后取 public_key 字段
+    if trimmed.starts_with('{') {
+        #[derive(serde::Deserialize)]
+        struct PublicKeyResponse {
+            public_key: String,
+        }
+        if let Ok(resp) = serde_json::from_str::<PublicKeyResponse>(trimmed) {
+            return Some(resp.public_key);
+        }
+    }
+    None
+}
+
 pub async fn fetch_server_public_key() -> Result<(), String> {
     use crate::infrastructure::http::client::Client;
     use tokio::time::{Duration, sleep};
@@ -109,12 +134,15 @@ pub async fn fetch_server_public_key() -> Result<(), String> {
                 }
 
                 match response.text().await {
-                    Ok(public_key) => {
-                        if public_key.contains("-----BEGIN RSA PUBLIC KEY-----") {
-                            *SERVER_PUBLIC_KEY.write().unwrap() = Some(public_key);
+                    Ok(body) => {
+                        // 服务器可能返回纯 PEM 文本（官方）或 JSON 包装 {"public_key":"..."}（自托管）。
+                        // 统一提取出纯 PEM 字符串后再校验。
+                        let public_key = extract_public_key_from_body(&body);
+                        if let Some(pk) = public_key.as_deref().filter(|pk| pk.contains("-----BEGIN RSA PUBLIC KEY-----")) {
+                            *SERVER_PUBLIC_KEY.write().unwrap() = Some(pk.to_string());
                             return Ok(());
                         } else {
-                            error!("服务器响应错误");
+                            error!("服务器响应错误：公钥格式无效");
                             return Err("初始化失败".to_string());
                         }
                     }

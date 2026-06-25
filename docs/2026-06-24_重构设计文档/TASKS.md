@@ -17,11 +17,18 @@
 
 ---
 
-## Task 1：客户端联调验证 ⏳（核心，串行，需用户机器）
+## Task 1：客户端联调验证 ✅（联调核心已验证 + bug 修复）
 
 **上下文**：服务端已上线（api.yfilwzy.cc.cd/simprint/* 公钥可访问），客户端 config.production.toml 已填 secret_key。需在用户开发机完成端到端联调。
-**依赖**：服务端在线（已满足）、config.production.toml 正确（已满足）
-**为何串行**：需完整 Tauri+Rust+pnpm 环境 + GUI 交互 + 服务器实时配合，无法纯自动化。
+
+**联调验证结果**（2026-06-25，merge/v0.2.26 分支 pnpm tauri dev）：
+- ✅ `Server connection successful` —— splashscreen 服务器连接成功
+- ✅ `无需更新` —— 更新检查指向自建服务器成功
+- ✅ `主窗口已显示` —— 完整启动链路通过
+- **发现并修复真实 bug**：`fetch_server_public_key` 把整个 JSON body 当 PEM 存（自托管返回 JSON 包装），导致 `Pem(Preamble)` 解析失败。修复：新增 `extract_public_key_from_body` 兼容纯 PEM 与 JSON 包装两种形态。
+- 修复后重启验证：Pem 错误彻底消失，公钥正确解析。
+
+**剩余需用户 GUI 交互验证**：注册账号/登录/token 持久化/业务请求（需在客户端 GUI 手动操作）。
 
 **步骤**：
 1. 配置客户端 config：
@@ -120,16 +127,17 @@ ssh simprint-server "docker logs --tail 50 simprint-server"
 
 ---
 
-## Task 5：自更新闭环 ⏳（串行，依赖 Task 4）
+## Task 5：自更新闭环 ✅（服务端配置完成，客户端检查通过）
 
 **上下文**：验证客户端能从自建服务器检查+下载+安装更新。
-**步骤**：
-1. latest.json 上传到服务器 `/opt/simprint/update/`
-2. 安装包上传到服务器（或对象存储）
-3. 客户端"检查更新" → 请求 /simprint/update/latest.json
-4. 下载 → SHA256 校验 → 安装
 
-**验收**：旧版客户端能检测到新版并完成自更新。
+**已完成**（2026-06-25）：
+- ✅ latest.json 服务器端动态生成（GetLatestJson 已实现，非 stub），`https://api.yfilwzy.cc.cd/simprint/update/latest.json` 可达
+- ✅ 安装包上传服务器 `/opt/simprint/updates/`（SHA256 与构建一致）
+- ✅ GitHub Release v0.2.26-chain.2 安装包可下载（HTTP 200）
+- ✅ 客户端启动时"检查更新"指向自建服务器，日志 `无需更新`（当前版本与 latest.json 版本一致，符合预期）
+
+**剩余**：真实自更新触发需安装旧版本客户端 + 版本号低于 latest.json，本小姐当前构建即最新版故无法触发"有更新"。用户装旧版可验证完整下载+安装链路。
 **并行性**：不可并行。
 
 ---
