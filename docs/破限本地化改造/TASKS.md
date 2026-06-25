@@ -1,19 +1,19 @@
 # 破限本地化改造 TASKS
 
-## 一、改造总览
+## 一、改造总览（全部完成 ✅）
 
 | # | 任务 | 状态 | 关键文件 |
 |---|---|---|---|
 | 1 | Rust http_post 本地拦截层 | ✅ 完成 | `src-tauri/src/local_interceptor/mod.rs` |
 | 2 | SQLite 本地存储模块 | ✅ 完成 | `src-tauri/src/local_interceptor/store.rs` |
-| 3 | 20+ 端点拦截（env CRUD/groups/tags/quotas/kernels） | ✅ 完成 | `mod.rs` try_intercept |
+| 3 | 24 个端点拦截（env CRUD/groups/tags/quotas/kernels） | ✅ 完成 | `mod.rs` try_intercept |
 | 4 | http_post 接入拦截器 | ✅ 完成 | `commands/network.rs:40` |
 | 5 | 内核 signature 校验跳过（破限模式） | ✅ 完成 | `kernel/mod.rs:69` |
 | 6 | 前端配额展示消除（6→999999） | ✅ 完成 | `free-quota-usage.tsx:52` |
 | 7 | cargo check 验证 | ✅ 零错误 | |
 | 8 | pnpm build 验证 | ✅ 零错误 | |
-| 9 | 构建安装包 + 端到端验证 | 🔄 进行中 | |
-| 10 | GitHub 发布 + 桌面交付 | ⏳ 待办 | |
+| 9 | 端到端验证 | ✅ 通过 | 程序启动+破限初始化+主窗口+10环境 |
+| 10 | GitHub 发布 + 桌面交付 | ✅ 完成 | Release v0.2.26-chain.4-nolimit |
 
 ## 二、技术实现详情
 
