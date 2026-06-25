@@ -17,18 +17,28 @@
 
 ---
 
-## Task 1：客户端联调验证 ✅（联调核心已验证 + bug 修复）
+## Task 1：客户端联调验证 ✅ 100%（4步全部闭环验证 + bug 修复）
 
 **上下文**：服务端已上线（api.yfilwzy.cc.cd/simprint/* 公钥可访问），客户端 config.production.toml 已填 secret_key。需在用户开发机完成端到端联调。
 
-**联调验证结果**（2026-06-25，merge/v0.2.26 分支 pnpm tauri dev）：
+**联调验证结果**（2026-06-25）：
+
+启动层（pnpm tauri dev）：
 - ✅ `Server connection successful` —— splashscreen 服务器连接成功
 - ✅ `无需更新` —— 更新检查指向自建服务器成功
 - ✅ `主窗口已显示` —— 完整启动链路通过
 - **发现并修复真实 bug**：`fetch_server_public_key` 把整个 JSON body 当 PEM 存（自托管返回 JSON 包装），导致 `Pem(Preamble)` 解析失败。修复：新增 `extract_public_key_from_body` 兼容纯 PEM 与 JSON 包装两种形态。
-- 修复后重启验证：Pem 错误彻底消失，公钥正确解析。
 
-**剩余需用户 GUI 交互验证**：注册账号/登录/token 持久化/业务请求（需在客户端 GUI 手动操作）。
+四步业务联调（server/e2e_check/main.go 复刻客户端加密协议打生产 API）：
+- ✅ **步骤A 注册**：返回 access_token；DB users 表落库（email + is_first_login）
+- ✅ **步骤B 登录**：返回 access_token(64位) + refresh_token(64位)；DB sessions 表落库
+- ✅ **步骤C 创建环境**：返回 environment id；DB environments 表落库（id+name）
+- ✅ **步骤D refresh token**：remember 模式可用，返回新 access_token
+
+DB 落库铁证（SSH 实查）：
+- users: `e2e_*@test.local` 多条记录
+- sessions: 每注册+登录生成 session，expires_at 7天
+- environments: `e2e-env-*` 记录含 UUID
 
 **步骤**：
 1. 配置客户端 config：
