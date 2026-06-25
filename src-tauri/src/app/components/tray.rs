@@ -23,12 +23,9 @@ pub fn menu(app: &mut App) -> Result<TrayIcon, tauri::Error> {
     let quit_i = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let show_i = MenuItem::with_id(app, "show", "显示", true, None::<&str>)?;
     let settings_i = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
-    let check_update_i = MenuItem::with_id(app, "check_update", "检查更新", true, None::<&str>)?;
     let about_i = MenuItem::with_id(app, "about", "关于", true, None::<&str>)?;
-    let menu = Menu::with_items(
-        app,
-        &[&show_i, &settings_i, &check_update_i, &about_i, &quit_i],
-    )?;
+    // 免登录版：移除「检查更新」项（更新功能已删除）
+    let menu = Menu::with_items(app, &[&show_i, &settings_i, &about_i, &quit_i])?;
 
     let icon = get_icon()?;
 

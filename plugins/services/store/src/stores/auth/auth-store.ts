@@ -10,11 +10,25 @@ import {
 /**
  * Auth Store
  * 专门管理用户认证相关的状态
+ *
+ * 【免登录版改造】isAuthenticated 恒为 true，initAuth 跳过服务器调用，
+ * user 使用本地默认用户对象兜底，避免组件因 user=null 崩溃。
  */
+// 免登录版本地默认用户（避免组件因 user=null 崩溃）
+const LOCAL_DEFAULT_USER: User = {
+  uuid: 'local-user',
+  id: 'local-user',
+  nickname: '本地用户',
+  email: 'local@localhost',
+  status: 'active',
+  current_workspace_uuid: null,
+  current_team_uuid: null,
+};
+
 export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
-  // 初始状态
-  user: null,
-  isAuthenticated: false,
+  // 初始状态（免登录版：默认已认证 + 本地用户）
+  user: LOCAL_DEFAULT_USER,
+  isAuthenticated: true,
   isInitializing: false,
   currentWorkspaceUuid: null,
   currentTeamUuid: null,
@@ -30,8 +44,8 @@ export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
 
   clearUser: () =>
     set({
-      user: null,
-      isAuthenticated: false,
+      user: LOCAL_DEFAULT_USER,
+      isAuthenticated: true, // 免登录版：清除后仍保持已认证
       currentWorkspaceUuid: null,
       currentTeamUuid: null,
     }),
@@ -59,57 +73,11 @@ export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
     }),
 
   initAuth: async () => {
-    // 如果正在初始化，直接返回
-    if (get().isInitializing) {
-      return;
-    }
-
-    // 如果 Store 中已有用户信息，说明已经登录，不需要做任何事
-    if (get().user) {
-      return;
-    }
-
-    set({ isInitializing: true });
-
-    try {
-      // 动态导入 invoke，避免在非 Tauri 环境中报错
-      const { invoke } = await import('@tauri-apps/api/core');
-
-      // 尝试使用记住的凭证自动登录
-      const rememberedCredential = (await invoke('get_remembered_credential')) as
-        | [string, string]
-        | null;
-
-      if (rememberedCredential) {
-        const [email, refreshToken] = rememberedCredential;
-        const autoLoginSuccess = await tryAutoLogin(invoke, email, refreshToken, set);
-
-        if (autoLoginSuccess) {
-          return; // 自动登录成功，直接返回
-        }
-
-        // 自动登录失败（可能是 refresh_token 过期），清除保存的凭证
-        console.warn('[AuthStore] 自动登录失败，清除保存的凭证');
-        await clearRememberedCredentialSafely(invoke);
-      }
-
-      // 检查并修复状态一致性
-      await ensureStateConsistency(invoke);
-
-      // 确保状态一致：无用户信息 = 未登录
-      set({
-        user: null,
-        isAuthenticated: false,
-        isInitializing: false,
-      });
-    } catch (error) {
-      console.error('[AuthStore] 初始化认证状态失败:', error);
-      // 初始化失败，确保状态一致
-      set({
-        user: null,
-        isAuthenticated: false,
-        isInitializing: false,
-      });
-    }
+    // 【免登录版】跳过所有服务器登录调用，直接保持已认证状态
+    set({
+      user: LOCAL_DEFAULT_USER,
+      isAuthenticated: true,
+      isInitializing: false,
+    });
   },
 }));

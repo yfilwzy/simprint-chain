@@ -1,4 +1,3 @@
-use crate::commands::updater;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
@@ -115,103 +114,19 @@ pub fn init_startup(app_handle: AppHandle) {
         tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
         emit_status_complete(&app_handle_clone, "security");
 
-        // 步骤4: 连接服务器
-        emit_progress(&app_handle_clone, 70, "连接服务器...", Some("server"));
-
-        // 等待服务器连接（使用现有的后台初始化）
-        // 这里我们等待一段时间，实际连接由 init_server_public_key_background 处理
-        tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
-
-        // 检查服务器连接状态
-        if let Err(e) =
-            crate::infrastructure::persistence::credential::init_server_public_key().await
-        {
-            log::warn!("Server connection failed: {}", e);
-            emit_status_complete(&app_handle_clone, "server");
-            emit_progress(&app_handle_clone, 90, "服务器连接失败", None);
-            // 发送连接失败事件，停止后续流程
-            emit_connection_failed(&app_handle_clone);
-            // 不再继续后续步骤（不创建主窗口，不发送 ready 事件）
-            return;
-        }
-
-        log::info!("Server connection successful");
+        // 步骤4: 服务器连接（免登录版：跳过公钥拉取，直接视为成功）
+        emit_progress(&app_handle_clone, 70, "准备应用...", Some("server"));
+        tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
+        log::info!("Server connection skipped (login-free mode)");
         emit_status_complete(&app_handle_clone, "server");
-        emit_progress(&app_handle_clone, 90, "服务器连接成功", None);
+        emit_progress(&app_handle_clone, 90, "就绪中...", None);
 
-        // 步骤4.1: 检查并处理更新（自动检查、下载、安装）
-        emit_progress(&app_handle_clone, 92, "检查更新...", Some("update-check"));
-        let updates_available = match updater::check_updates(app_handle_clone.clone()).await {
-            Ok(result) => result.has_updates,
-            Err(e) => {
-                log::error!("Update check failed: {}", e);
-                emit_progress(
-                    &app_handle_clone,
-                    92,
-                    "检查更新失败，继续启动",
-                    Some("update-check"),
-                );
-                false
-            }
-        };
+        // 免登录版：跳过更新检查（更新功能已移除）
 
-        if updates_available {
-            emit_progress(
-                &app_handle_clone,
-                94,
-                "检测到更新，开始下载...",
-                Some("update-download"),
-            );
-            match updater::download_updates(app_handle_clone.clone(), None).await {
-                Ok(download_result) => {
-                    if download_result.success_count > 0 {
-                        emit_progress(
-                            &app_handle_clone,
-                            96,
-                            "下载完成，准备安装",
-                            Some("update-install"),
-                        );
-                        // 触发安装并退出（updater.exe 负责后续重启）
-                        if let Err(e) =
-                            updater::start_update_install(app_handle_clone.clone()).await
-                        {
-                            log::error!("Update installation start failed: {}", e);
-                            emit_progress(
-                                &app_handle_clone,
-                                96,
-                                "安装启动失败，继续当前版本",
-                                Some("update-install"),
-                            );
-                        }
-                        // 无论安装启动是否成功，都不再继续创建主窗口，交由 updater.exe 或用户重启
-                        return;
-                    } else {
-                        log::warn!("Update download failed, continuing with current version");
-                        emit_progress(
-                            &app_handle_clone,
-                            94,
-                            "下载失败，继续启动当前版本",
-                            Some("update-download"),
-                        );
-                    }
-                }
-                Err(e) => {
-                    log::error!("Update download error: {}", e);
-                    emit_progress(
-                        &app_handle_clone,
-                        94,
-                        "下载更新失败，继续启动当前版本",
-                        Some("update-download"),
-                    );
-                }
-            }
-        }
-
-        // 创建主窗口（在步骤4完成后）
+        // 创建主窗口
         if let Err(e) = crate::commands::window::create_main_window(app_handle_clone.clone()).await
         {
             log::error!("Failed to create main window: {}", e);
-            // 不阻止加载流程继续
         }
 
         // 步骤5: 准备就绪
