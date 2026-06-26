@@ -496,19 +496,33 @@ fn row_to_environment_item(row: &rusqlite::Row) -> rusqlite::Result<Value> {
         .get("kernel")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    let system = window_info
+        .get("system")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
+    // 前端 EnvironmentDetailResponse 要求嵌套结构：
+    // 每个 item = { environment: {...}, group, proxy, tags, accounts }
     Ok(json!({
-        "uuid": uuid,
-        "id": uuid,
-        "name": name,
-        "config": config,
-        "group_uuid": group_uuid,
-        "proxy_uuid": proxy_uuid,
-        "kernel": kernel,
-        "status": "stopped",
-        "created_at": created_at,
-        "updated_at": updated_at,
-        "window_info": window_info
+        "environment": {
+            "id": 0,
+            "uuid": uuid,
+            "name": name,
+            "config": config,
+            "group_uuid": group_uuid,
+            "proxy_uuid": proxy_uuid,
+            "kernel": kernel,
+            "system_info": system,
+            "kernel_info": kernel,
+            "status": "ready",
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "window_info": window_info
+        },
+        "group": null,
+        "proxy": null,
+        "tags": [],
+        "accounts": []
     }))
 }
 
